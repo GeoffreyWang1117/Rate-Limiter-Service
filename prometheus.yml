@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'rate-limiter-monitor'
+
+scrape_configs:
+  - job_name: 'rate-limiter-service'
+    static_configs:
+      - targets: ['rate-limiter:9090']
+        labels:
+          service: 'rate-limiter'
+          environment: 'production'
+
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+        labels:
+          service: 'redis'
