@@ -17,6 +17,11 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_DB=0
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=rate_limiter
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
       - DEFAULT_RATE_LIMIT=1000
       - DEFAULT_WINDOW_SECONDS=60
       - DEFAULT_ALGORITHM=token_bucket
@@ -26,6 +31,8 @@ services:
       - LOG_FORMAT=json
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     networks:
       - rate-limiter-network
@@ -54,6 +61,27 @@ services:
       interval: 10s
       timeout: 3s
       retries: 3
+
+  # PostgreSQL
+  postgres:
+    image: postgres:16-alpine
+    container_name: rate-limiter-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=rate_limiter
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - rate-limiter-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # Prometheus (optional - for monitoring)
   prometheus:
@@ -96,5 +124,6 @@ networks:
 
 volumes:
   redis-data:
+  postgres-data:
   prometheus-data:
   grafana-data:

@@ -2,12 +2,17 @@ import { createApp } from './app';
 import config from './config';
 import logger from './utils/logger';
 import redisService from './services/redis.service';
+import postgresService from './services/postgres.service';
 
 async function bootstrap() {
   try {
     // Connect to Redis
     logger.info('Connecting to Redis...');
     await redisService.connect();
+
+    // Connect to PostgreSQL
+    logger.info('Connecting to PostgreSQL...');
+    await postgresService.connect();
 
     // Create Express app
     const app = createApp();
@@ -32,6 +37,10 @@ async function bootstrap() {
         try {
           await redisService.disconnect();
           logger.info('Redis disconnected');
+
+          await postgresService.disconnect();
+          logger.info('PostgreSQL disconnected');
+
           process.exit(0);
         } catch (error) {
           logger.error('Error during shutdown:', error);

@@ -63,6 +63,15 @@ export interface RateLimiterConfig {
     maxRetries: number;
     retryDelay: number;
   };
+  postgres: {
+    host: string;
+    port: number;
+    database: string;
+    user: string;
+    password: string;
+    maxConnections: number;
+    idleTimeout: number;
+  };
   server: {
     port: number;
     host: string;
@@ -96,4 +105,44 @@ export interface IRateLimitAlgorithm {
 export interface RedisLuaScript {
   script: string;
   numberOfKeys: number;
+}
+
+// Rule Management Types
+export interface CreateRuleRequest {
+  name: string;
+  description?: string;
+  algorithm: RateLimitAlgorithm;
+  limit: number;
+  windowSeconds: number;
+  dimensionType: DimensionType;
+  dimensionPattern?: string;
+  priority?: number;
+  enabled?: boolean;
+  tags?: string[];
+}
+
+export interface UpdateRuleRequest {
+  name?: string;
+  description?: string;
+  algorithm?: RateLimitAlgorithm;
+  limit?: number;
+  windowSeconds?: number;
+  dimensionType?: DimensionType;
+  dimensionPattern?: string;
+  priority?: number;
+  enabled?: boolean;
+  tags?: string[];
+}
+
+export interface RuleMatchContext {
+  identifier: string;
+  endpoint?: string;
+  ip?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RuleMatchResult {
+  matched: boolean;
+  rule?: RateLimitRule;
+  reason?: string;
 }

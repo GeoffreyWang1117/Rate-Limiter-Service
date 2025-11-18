@@ -12,6 +12,15 @@ const config: RateLimiterConfig = {
     maxRetries: parseInt(process.env.REDIS_MAX_RETRIES || '3', 10),
     retryDelay: parseInt(process.env.REDIS_RETRY_DELAY || '100', 10),
   },
+  postgres: {
+    host: process.env.POSTGRES_HOST || 'localhost',
+    port: parseInt(process.env.POSTGRES_PORT || '5432', 10),
+    database: process.env.POSTGRES_DB || 'rate_limiter',
+    user: process.env.POSTGRES_USER || 'postgres',
+    password: process.env.POSTGRES_PASSWORD || 'postgres',
+    maxConnections: parseInt(process.env.POSTGRES_MAX_CONNECTIONS || '20', 10),
+    idleTimeout: parseInt(process.env.POSTGRES_IDLE_TIMEOUT || '30000', 10),
+  },
   server: {
     port: parseInt(process.env.PORT || '3000', 10),
     host: process.env.HOST || '0.0.0.0',

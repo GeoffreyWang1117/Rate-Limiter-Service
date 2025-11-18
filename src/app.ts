@@ -5,6 +5,7 @@ import compression from 'compression';
 import { requestLogger } from './middleware/request-logger';
 import { errorHandler } from './middleware/error-handler';
 import rateLimitRoutes from './routes/rate-limit.routes';
+import rulesRoutes from './routes/rules.routes';
 import healthRoutes from './routes/health.routes';
 import metricsRoutes from './routes/metrics.routes';
 import logger from './utils/logger';
@@ -33,6 +34,7 @@ export function createApp(): Application {
 
   // API Routes
   app.use('/api/v1', rateLimitRoutes);
+  app.use('/api/v1/rules', rulesRoutes);
   app.use('/health', healthRoutes);
   app.use('/metrics', metricsRoutes);
 
@@ -40,12 +42,13 @@ export function createApp(): Application {
   app.get('/', (_req, res) => {
     res.json({
       service: 'Rate Limiter Service',
-      version: '1.0.0',
+      version: '2.0.0',
       status: 'running',
       endpoints: {
         rateLimit: '/api/v1/check-rate-limit',
         reset: '/api/v1/reset',
         stats: '/api/v1/stats',
+        rules: '/api/v1/rules',
         health: '/health',
         metrics: '/metrics',
       },
