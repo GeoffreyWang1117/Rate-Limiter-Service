@@ -1,7 +1,12 @@
 # Dependencies
 node_modules/
-package-lock.json
 yarn.lock
+
+# package-lock.json is deliberately NOT ignored. Both the Dockerfile and CI run
+# `npm ci`, which refuses to install without a lockfile -- so with it ignored, a
+# fresh clone could not be built or tested at all, and every build that did run
+# resolved its own dependency versions. Verified: `npm ci` on a `git archive` of
+# HEAD exits EUSAGE.
 
 # Build output
 dist/
@@ -39,3 +44,14 @@ coverage/
 .cache/
 temp/
 tmp/
+
+# Local dev stack data (Redis AOF, Postgres cluster, service logs)
+.devstack/
+
+# bench/results/ is deliberately NOT ignored. Every number in README.md is read
+# out of a file in there, so ignoring it would leave the claims in the docs with
+# no artifact behind them -- which is the thing this repository exists to not do.
+
+# Audit tooling state, not project files.
+.convergence_ledger.json
+.pipeline_ledger.json
