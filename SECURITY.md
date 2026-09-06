@@ -32,7 +32,7 @@ reported here that was not reproduced against the service.
 | JS/TS and multi-language SAST | semgrep | clean |
 | Python SAST | bandit | clean (no Python) |
 | Secrets, working tree | detect-secrets | clean; 2 audited false positives in `.secrets.baseline` |
-| Secrets, git history | gitleaks | clean on this branch |
+| Secrets, git history | gitleaks | clean; see `.gitleaksignore` for two suppressed fingerprints |
 | Dependencies | trivy, npm audit | clean; 3 CVEs found and fixed, see below |
 | Containers and IaC | trivy, checkov | clean |
 | Shell scripts | shellcheck | clean |
@@ -82,6 +82,16 @@ reported here that was not reproduced against the service.
 - **`minimatch` ReDoS advisories are development-only.** They come through the
   build and test toolchain; `npm ls minimatch --omit=dev` is empty, so nothing in
   the runtime image contains it.
+
+### A note on the two scanners
+
+`.secrets.baseline` is detect-secrets' audit record; it stores a SHA1 of every
+candidate so a later run can tell a triaged finding from a new one. gitleaks
+reads those hex strings as generic API keys and reports them. What is hashed is
+two Makefile lines of shell substitution -- variable names in the target that
+generates a `.env` of random secrets, not values. They are suppressed in
+`.gitleaksignore` by fingerprint rather than by ignoring the file, so a real
+secret appearing in the baseline later would still be reported.
 
 ### Known and accepted
 

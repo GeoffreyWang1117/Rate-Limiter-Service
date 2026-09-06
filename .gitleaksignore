@@ -1,0 +1,17 @@
+# Two scanners disagreeing about each other's output.
+#
+# .secrets.baseline is detect-secrets' audit record. It stores a SHA1 of each
+# candidate it found so a later run can tell an already-triaged finding from a
+# new one. gitleaks sees those 40-character hex strings and reports them as
+# generic API keys.
+#
+# What is actually hashed here is Makefile lines 51-52 -- shell substitution in
+# the target that generates a .env of random secrets, i.e. variable names, not
+# values. detect-secrets already records them as `is_secret: false`.
+#
+# Suppressed by fingerprint rather than by ignoring the file, so a genuine
+# secret appearing in the baseline later would still be reported.
+.secrets.baseline:generic-api-key:135
+.secrets.baseline:generic-api-key:143
+84c723b09b9fcb1467029c195620b5f7d4fdbcfe:.secrets.baseline:generic-api-key:135
+84c723b09b9fcb1467029c195620b5f7d4fdbcfe:.secrets.baseline:generic-api-key:143
