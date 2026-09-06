@@ -6,6 +6,7 @@ import {
   DimensionType,
 } from '../types';
 import logger from '../utils/logger';
+import { matchPattern } from '../utils/pattern';
 
 /**
  * Rule Engine Service
@@ -93,39 +94,13 @@ class RuleEngineService {
   }
 
   /**
-   * Pattern matching with wildcard support
-   * Supports: exact match, wildcard (*), prefix match, regex
+   * Delegates to the shared matcher. The previous implementation built its
+   * regex by escaping dots and nothing else, so an operator pattern containing
+   * `+`, `(` or `|` was silently interpreted as a regex -- either matching far
+   * more than intended or throwing on every request that reached it.
    */
   private matchPattern(value: string, pattern: string): boolean {
-    // Exact match
-    if (value === pattern) {
-      return true;
-    }
-
-    // Wildcard match (e.g., "user:*", "192.168.*", "/api/*")
-    if (pattern.includes('*')) {
-      const regexPattern = pattern
-        .replace(/\./g, '\\.')
-        .replace(/\*/g, '.*')
-        .replace(/\?/g, '.');
-
-      const regex = new RegExp(`^${regexPattern}$`);
-      return regex.test(value);
-    }
-
-    // Regex match (pattern starts with / and ends with /)
-    if (pattern.startsWith('/') && pattern.endsWith('/')) {
-      try {
-        const regexPattern = pattern.slice(1, -1);
-        const regex = new RegExp(regexPattern);
-        return regex.test(value);
-      } catch (error) {
-        logger.error('Invalid regex pattern', { pattern, error });
-        return false;
-      }
-    }
-
-    return false;
+    return matchPattern(value, pattern);
   }
 
   /**
@@ -145,9 +120,10 @@ class RuleEngineService {
       switch (operator) {
         case '=':
           return metadataValue === value;
-        case '~':
+        case '~': {
           const regex = new RegExp(value);
           return regex.test(metadataValue);
+        }
         default:
           return false;
       }

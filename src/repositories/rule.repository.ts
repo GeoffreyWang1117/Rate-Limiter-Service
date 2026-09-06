@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'node:crypto';
 import postgresService from '../services/postgres.service';
 import {
   RateLimitRule,
@@ -10,6 +10,31 @@ import {
 import logger from '../utils/logger';
 
 /**
+ * A row of rate_limit_rules as the driver returns it.
+ *
+ * Previously every query was `query<any>` and rows were mapped through
+ * `mapRowToRule(row: any)`, so a column rename or a type change anywhere in the
+ * schema type-checked cleanly and failed at runtime. Naming the shape once means
+ * the compiler checks the mapping against it.
+ */
+interface RuleRow {
+  id: string;
+  name: string;
+  description: string | null;
+  algorithm: string;
+  limit_value: number;
+  window_seconds: number;
+  dimension_type: string;
+  dimension_pattern: string | null;
+  priority: number;
+  enabled: boolean;
+  tags: string[] | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
  * Rule Repository
  * Handles all database operations for rate limit rules
  */
@@ -18,7 +43,7 @@ class RuleRepository {
    * Create a new rate limit rule
    */
   async create(request: CreateRuleRequest): Promise<RateLimitRule> {
-    const id = uuidv4();
+    const id = randomUUID();
 
     const query = `
       INSERT INTO rate_limit_rules (
@@ -44,7 +69,7 @@ class RuleRepository {
     ];
 
     try {
-      const result = await postgresService.query<any>(query, values);
+      const result = await postgresService.query<RuleRow>(query, values);
       const rule = this.mapRowToRule(result.rows[0]);
 
       logger.info('Rule created', { ruleId: rule.id, ruleName: rule.name });
@@ -62,7 +87,7 @@ class RuleRepository {
     const query = 'SELECT * FROM rate_limit_rules WHERE id = $1';
 
     try {
-      const result = await postgresService.query<any>(query, [id]);
+      const result = await postgresService.query<RuleRow>(query, [id]);
 
       if (result.rows.length === 0) {
         return null;
@@ -82,7 +107,7 @@ class RuleRepository {
     const query = 'SELECT * FROM rate_limit_rules WHERE name = $1';
 
     try {
-      const result = await postgresService.query<any>(query, [name]);
+      const result = await postgresService.query<RuleRow>(query, [name]);
 
       if (result.rows.length === 0) {
         return null;
@@ -105,7 +130,7 @@ class RuleRepository {
     offset?: number;
   }): Promise<RateLimitRule[]> {
     let query = 'SELECT * FROM rate_limit_rules WHERE 1=1';
-    const values: any[] = [];
+    const values: unknown[] = [];
     let paramIndex = 1;
 
     if (options?.enabled !== undefined) {
@@ -131,7 +156,7 @@ class RuleRepository {
     }
 
     try {
-      const result = await postgresService.query<any>(query, values);
+      const result = await postgresService.query<RuleRow>(query, values);
       return result.rows.map((row) => this.mapRowToRule(row));
     } catch (error) {
       logger.error('Failed to find all rules:', error);
@@ -150,7 +175,7 @@ class RuleRepository {
     `;
 
     try {
-      const result = await postgresService.query<any>(query);
+      const result = await postgresService.query<RuleRow>(query);
       return result.rows.map((row) => this.mapRowToRule(row));
     } catch (error) {
       logger.error('Failed to find enabled rules:', error);
@@ -163,7 +188,7 @@ class RuleRepository {
    */
   async update(id: string, request: UpdateRuleRequest): Promise<RateLimitRule | null> {
     const updates: string[] = [];
-    const values: any[] = [];
+    const values: unknown[] = [];
     let paramIndex = 1;
 
     if (request.name !== undefined) {
@@ -230,7 +255,7 @@ class RuleRepository {
     `;
 
     try {
-      const result = await postgresService.query<any>(query, values);
+      const result = await postgresService.query<RuleRow>(query, values);
 
       if (result.rows.length === 0) {
         return null;
@@ -292,7 +317,7 @@ class RuleRepository {
    */
   async count(options?: { enabled?: boolean }): Promise<number> {
     let query = 'SELECT COUNT(*) as count FROM rate_limit_rules';
-    const values: any[] = [];
+    const values: unknown[] = [];
 
     if (options?.enabled !== undefined) {
       query += ' WHERE enabled = $1';
@@ -311,7 +336,7 @@ class RuleRepository {
   /**
    * Map database row to RateLimitRule
    */
-  private mapRowToRule(row: any): RateLimitRule {
+  private mapRowToRule(row: RuleRow): RateLimitRule {
     return {
       id: row.id,
       name: row.name,
@@ -320,7 +345,7 @@ class RuleRepository {
       windowSeconds: row.window_seconds,
       dimension: {
         type: row.dimension_type as DimensionType,
-        pattern: row.dimension_pattern,
+        pattern: row.dimension_pattern ?? undefined,
       },
       priority: row.priority,
       enabled: row.enabled,

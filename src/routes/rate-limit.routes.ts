@@ -2,10 +2,23 @@ import { Router, Request, Response, NextFunction } from 'express';
 import Joi from 'joi';
 import rateLimiterService from '../services/rate-limiter.service';
 import { validateRequest } from '../middleware/validate-request';
+import { guardState } from '../middleware/degraded-mode';
 import { RateLimitAlgorithm } from '../types';
-import logger from '../utils/logger';
 
 const router = Router();
+
+/**
+ * When Redis is unreachable this surface falls back to the configured mode.
+ * Fail-open reports the request as allowed with the caller's own limit echoed
+ * back, and flags the response as degraded so nothing downstream mistakes it
+ * for an enforced verdict.
+ */
+const guarded = guardState('rateLimit', (req) => ({
+  allowed: true,
+  limit: req.body?.limit ?? null,
+  remaining: null,
+  resetAt: null,
+}));
 
 // Validation schemas
 const checkRateLimitSchema = Joi.object({
@@ -25,6 +38,9 @@ const resetRateLimitSchema = Joi.object({
   algorithm: Joi.string()
     .valid(...Object.values(RateLimitAlgorithm))
     .required(),
+  // Fixed-window keys are indexed by window, so the caller has to say which
+  // window size it configured or the wrong key gets cleared.
+  windowSeconds: Joi.number().integer().min(1).max(86400).optional(),
 });
 
 const getStatsSchema = Joi.object({
@@ -32,6 +48,7 @@ const getStatsSchema = Joi.object({
   algorithm: Joi.string()
     .valid(...Object.values(RateLimitAlgorithm))
     .required(),
+  windowSeconds: Joi.number().integer().min(1).max(86400).optional(),
 });
 
 /**
@@ -41,23 +58,22 @@ const getStatsSchema = Joi.object({
 router.post(
   '/check-rate-limit',
   validateRequest(checkRateLimitSchema),
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
+  guarded(async (req: Request, res: Response) => {
       const { key, identifier, algorithm, limit, windowSeconds, endpoint, metadata } =
         req.body;
 
       const result = await rateLimiterService.check(
-        { key, identifier, endpoint, metadata },
-        algorithm,
-        limit,
-        windowSeconds
+        { key, identifier, endpoint, ip: req.ip, metadata },
+        { algorithm, limit, windowSeconds }
       );
 
-      // Set standard rate limit headers
       res.set({
         'X-RateLimit-Limit': result.limit.toString(),
         'X-RateLimit-Remaining': result.remaining.toString(),
         'X-RateLimit-Reset': new Date(result.resetAt).toISOString(),
+        // Which rule produced this verdict. Without it, a 429 in production is
+        // untraceable to the configuration that caused it.
+        'X-RateLimit-Policy': result.effective.ruleName ?? result.effective.source,
       });
 
       if (!result.allowed && result.retryAfter) {
@@ -70,11 +86,9 @@ router.post(
         remaining: result.remaining,
         resetAt: result.resetAt,
         ...(result.retryAfter && { retryAfter: result.retryAfter }),
+        effective: result.effective,
       });
-    } catch (error) {
-      next(error);
-    }
-  }
+  })
 );
 
 /**
@@ -86,9 +100,9 @@ router.post(
   validateRequest(resetRateLimitSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { key, algorithm } = req.body;
+      const { key, algorithm, windowSeconds } = req.body;
 
-      await rateLimiterService.reset(key, algorithm);
+      await rateLimiterService.reset(key, algorithm, windowSeconds);
 
       res.status(200).json({
         success: true,
@@ -109,9 +123,9 @@ router.post(
   validateRequest(getStatsSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { key, algorithm } = req.body;
+      const { key, algorithm, windowSeconds } = req.body;
 
-      const stats = await rateLimiterService.getStats(key, algorithm);
+      const stats = await rateLimiterService.getStats(key, algorithm, windowSeconds);
 
       if (!stats) {
         res.status(404).json({

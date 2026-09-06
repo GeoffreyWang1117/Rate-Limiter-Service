@@ -2,12 +2,15 @@ import { Router, Request, Response, NextFunction } from 'express';
 import Joi from 'joi';
 import ruleRepository from '../repositories/rule.repository';
 import ruleEngineService from '../services/rule-engine.service';
+import { requireControlPlaneKey } from '../middleware/auth';
 import { validateRequest } from '../middleware/validate-request';
 import { RateLimitAlgorithm, DimensionType } from '../types';
-import { NotFoundError, ValidationError } from '../utils/errors';
-import logger from '../utils/logger';
+import { ConflictError, NotFoundError, isUniqueViolation } from '../utils/errors';
 
 const router = Router();
+
+// Rule CRUD is control plane: it decides what every limit is.
+router.use(requireControlPlaneKey);
 
 // Validation schemas
 const createRuleSchema = Joi.object({
@@ -53,22 +56,19 @@ router.post(
   validateRequest(createRuleSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Check if rule with same name already exists
-      const existing = await ruleRepository.findByName(req.body.name);
-      if (existing) {
-        throw new ValidationError(`Rule with name '${req.body.name}' already exists`);
-      }
-
+      // The unique constraint on `name` is the guard, not a prior SELECT. Reading
+      // first and then inserting leaves a window in which two concurrent creates
+      // both see no existing row, and the loser surfaces a raw driver error as a
+      // 500 rather than the conflict it is.
       const rule = await ruleRepository.create(req.body);
-
-      // Invalidate cache
       ruleEngineService.invalidateCache();
 
-      res.status(201).json({
-        success: true,
-        data: rule,
-      });
+      res.status(201).json({ success: true, data: rule });
     } catch (error) {
+      if (isUniqueViolation(error)) {
+        next(new ConflictError(`Rule with name '${req.body.name}' already exists`));
+        return;
+      }
       next(error);
     }
   }
@@ -82,7 +82,12 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { enabled, dimensionType, limit, offset } = req.query;
 
-    const options: any = {};
+    const options: {
+      enabled?: boolean;
+      dimensionType?: DimensionType;
+      limit?: number;
+      offset?: number;
+    } = {};
 
     if (enabled !== undefined) {
       options.enabled = enabled === 'true';
@@ -149,28 +154,21 @@ router.put(
   validateRequest(updateRuleSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Check if name is being updated and conflicts with existing rule
-      if (req.body.name) {
-        const existing = await ruleRepository.findByName(req.body.name);
-        if (existing && existing.id !== req.params.id) {
-          throw new ValidationError(`Rule with name '${req.body.name}' already exists`);
-        }
-      }
-
       const rule = await ruleRepository.update(req.params.id, req.body);
 
       if (!rule) {
         throw new NotFoundError(`Rule not found: ${req.params.id}`);
       }
 
-      // Invalidate cache
       ruleEngineService.invalidateCache();
 
-      res.json({
-        success: true,
-        data: rule,
-      });
+      res.json({ success: true, data: rule });
     } catch (error) {
+      // Same reasoning as create: the constraint decides, not a prior read.
+      if (isUniqueViolation(error)) {
+        next(new ConflictError(`Rule with name '${req.body.name}' already exists`));
+        return;
+      }
       next(error);
     }
   }
@@ -258,7 +256,7 @@ router.post(
  * GET /api/v1/rules/cache/stats
  * Get rule cache statistics
  */
-router.get('/cache/stats', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/cache/stats', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const stats = ruleEngineService.getCacheStats();
 
@@ -277,7 +275,7 @@ router.get('/cache/stats', async (req: Request, res: Response, next: NextFunctio
  */
 router.post(
   '/cache/invalidate',
-  async (req: Request, res: Response, next: NextFunction) => {
+  async (_req: Request, res: Response, next: NextFunction) => {
     try {
       ruleEngineService.invalidateCache();
 
