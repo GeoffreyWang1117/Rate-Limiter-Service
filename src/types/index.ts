@@ -38,6 +38,8 @@ export interface RateLimitCheckRequest {
   key: string;
   identifier: string;
   endpoint?: string;
+  /** Client address, for rules scoped to the IP dimension. */
+  ip?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -45,8 +47,12 @@ export interface RateLimitCheckResult {
   allowed: boolean;
   limit: number;
   remaining: number;
+  /** Epoch ms at which the caller regains full capacity. */
   resetAt: number;
+  /** Seconds, for the `Retry-After` header, which has second granularity. */
   retryAfter?: number;
+  /** Millisecond-precision form of `retryAfter`, for internal scheduling. */
+  retryAfterMs?: number;
 }
 
 export interface TokenBucketState {
@@ -82,9 +88,15 @@ export interface RateLimiterConfig {
     limit: number;
     windowSeconds: number;
   };
+  auth: {
+    controlPlaneKey?: string;
+  };
   monitoring: {
     enabled: boolean;
-    metricsPort: number;
+  };
+  failure: {
+    rateLimit: 'fail_open' | 'fail_closed';
+    admission: 'fail_open' | 'fail_closed';
   };
   logging: {
     level: string;
@@ -93,13 +105,24 @@ export interface RateLimiterConfig {
 }
 
 export interface IRateLimitAlgorithm {
+  /**
+   * @param cost units of budget this call consumes. Only the token bucket
+   *   supports a value other than 1; counting algorithms reject it rather than
+   *   silently under-charging.
+   */
   check(
     key: string,
     limit: number,
-    windowSeconds: number
+    windowSeconds: number,
+    cost?: number
   ): Promise<RateLimitCheckResult>;
-  reset(key: string): Promise<void>;
-  getStats(key: string): Promise<{ count: number; resetAt: number } | null>;
+  reset(key: string, windowSeconds?: number): Promise<void>;
+  getStats(
+    key: string,
+    windowSeconds?: number
+  ): Promise<{ count: number; resetAt: number } | null>;
+  /** Pre-loads the algorithm's Lua script into the Redis script cache. */
+  warm(): Promise<void>;
 }
 
 export interface RedisLuaScript {

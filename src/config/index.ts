@@ -33,9 +33,36 @@ const config: RateLimiterConfig = {
     limit: parseInt(process.env.DEFAULT_RATE_LIMIT || '1000', 10),
     windowSeconds: parseInt(process.env.DEFAULT_WINDOW_SECONDS || '60', 10),
   },
+  auth: {
+    /**
+     * Shared secret for the control plane. Absent in development means the
+     * control plane is open; absent in production means it is closed.
+     */
+    controlPlaneKey: process.env.CONTROL_PLANE_API_KEY || undefined,
+  },
   monitoring: {
-    enabled: process.env.ENABLE_METRICS === 'true',
-    metricsPort: parseInt(process.env.METRICS_PORT || '9090', 10),
+    // Defaults on. The previous default was off unless the string was exactly
+    // 'true', so a deployment that simply omitted the variable ran blind.
+    enabled: process.env.ENABLE_METRICS !== 'false',
+  },
+  /**
+   * What to do when Redis is unreachable.
+   *
+   * `fail_open` keeps traffic flowing and stops the limiter from being a single
+   * point of failure for the service it fronts. `fail_closed` refuses traffic it
+   * cannot account for, which is the right choice when what sits behind the
+   * limiter is scarce and expensive -- an unmetered flood into a GPU fleet costs
+   * far more than the requests it drops.
+   *
+   * Defaults to fail_open for the generic HTTP limiter and fail_closed for LLM
+   * admission, because the downstream cost profiles genuinely differ.
+   */
+  failure: {
+    rateLimit:
+      (process.env.RATE_LIMIT_FAILURE_MODE as 'fail_open' | 'fail_closed') || 'fail_open',
+    admission:
+      (process.env.ADMISSION_FAILURE_MODE as 'fail_open' | 'fail_closed') ||
+      'fail_closed',
   },
   logging: {
     level: process.env.LOG_LEVEL || 'info',

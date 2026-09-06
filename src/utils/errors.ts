@@ -38,6 +38,30 @@ export class ValidationError extends RateLimiterError {
   }
 }
 
+/**
+ * The request was well-formed but conflicts with existing state -- a duplicate
+ * name, a uniqueness constraint. Distinct from ValidationError: the caller did
+ * not send anything malformed, so 400 would be misleading and 409 tells a client
+ * that retrying the identical request will not help.
+ */
+export class ConflictError extends RateLimiterError {
+  constructor(message: string) {
+    super(message, 409, 'CONFLICT');
+    this.name = 'ConflictError';
+  }
+}
+
+/** Postgres unique_violation. */
+export const PG_UNIQUE_VIOLATION = '23505';
+
+export function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: string }).code === PG_UNIQUE_VIOLATION
+  );
+}
+
 export class NotFoundError extends RateLimiterError {
   constructor(message: string) {
     super(message, 404, 'NOT_FOUND');
