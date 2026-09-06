@@ -3,6 +3,8 @@ import config from './config';
 import logger from './utils/logger';
 import redisService from './services/redis.service';
 import postgresService from './services/postgres.service';
+import { AlgorithmFactory } from './algorithms';
+import admissionService from './llm/admission.service';
 
 async function bootstrap() {
   try {
@@ -14,7 +16,13 @@ async function bootstrap() {
     logger.info('Connecting to PostgreSQL...');
     await postgresService.connect();
 
-    // Create Express app
+    // Load every Lua script into the Redis script cache before accepting
+    // traffic. Otherwise the first request of each kind pays to ship a script
+    // body, which shows up as a latency spike on exactly the requests a fresh
+    // replica sees right after a deploy.
+    await Promise.all([AlgorithmFactory.warmAll(), admissionService.warm()]);
+    logger.info('Lua scripts loaded into Redis script cache');
+
     const app = createApp();
 
     // Start server
@@ -48,11 +56,12 @@ async function bootstrap() {
         }
       });
 
-      // Force shutdown after 30 seconds
+      // Backstop: if in-flight requests never drain, do not hang forever. unref()
+      // so this timer alone cannot keep the process alive once shutdown is clean.
       setTimeout(() => {
         logger.error('Forced shutdown after timeout');
         process.exit(1);
-      }, 30000);
+      }, 30000).unref();
     };
 
     process.on('SIGTERM', () => shutdown('SIGTERM'));
