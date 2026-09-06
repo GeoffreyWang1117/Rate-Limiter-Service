@@ -3,35 +3,31 @@ import { SlidingWindowAlgorithm } from './sliding-window';
 import { FixedWindowAlgorithm } from './fixed-window';
 import { IRateLimitAlgorithm, RateLimitAlgorithm } from '../types';
 
-/**
- * Algorithm factory - creates the appropriate rate limiting algorithm
- */
+const registry: Partial<Record<RateLimitAlgorithm, IRateLimitAlgorithm>> = {
+  [RateLimitAlgorithm.TOKEN_BUCKET]: new TokenBucketAlgorithm(),
+  [RateLimitAlgorithm.SLIDING_WINDOW]: new SlidingWindowAlgorithm(),
+  [RateLimitAlgorithm.FIXED_WINDOW]: new FixedWindowAlgorithm(),
+};
+
 export class AlgorithmFactory {
-  private static instances: Map<RateLimitAlgorithm, IRateLimitAlgorithm> = new Map();
-
   static getAlgorithm(type: RateLimitAlgorithm): IRateLimitAlgorithm {
-    // Reuse instances for better performance
-    if (!this.instances.has(type)) {
-      switch (type) {
-        case RateLimitAlgorithm.TOKEN_BUCKET:
-          this.instances.set(type, new TokenBucketAlgorithm());
-          break;
-        case RateLimitAlgorithm.SLIDING_WINDOW:
-          this.instances.set(type, new SlidingWindowAlgorithm());
-          break;
-        case RateLimitAlgorithm.FIXED_WINDOW:
-          this.instances.set(type, new FixedWindowAlgorithm());
-          break;
-        default:
-          throw new Error(`Unsupported algorithm: ${type}`);
-      }
+    const algorithm = registry[type];
+    if (!algorithm) {
+      throw new Error(`Unsupported algorithm: ${type}`);
     }
-
-    return this.instances.get(type)!;
+    return algorithm;
   }
 
-  static clearInstances(): void {
-    this.instances.clear();
+  static all(): IRateLimitAlgorithm[] {
+    return Object.values(registry) as IRateLimitAlgorithm[];
+  }
+
+  /**
+   * Loads every Lua script into the Redis script cache at boot, so the first
+   * request of the process does not pay to ship a script body.
+   */
+  static async warmAll(): Promise<void> {
+    await Promise.all(this.all().map((a) => a.warm()));
   }
 }
 

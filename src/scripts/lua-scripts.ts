@@ -1,158 +1,151 @@
 /**
- * Lua scripts for atomic Redis operations
+ * Lua scripts for atomic Redis operations.
+ *
+ * Every rate-limit decision must be a single atomic read-modify-write. Doing the
+ * refill/compare/deduct in application code would let two concurrent gateway
+ * instances both observe "1 token left" and both admit, over-admitting by the
+ * number of replicas. Redis executes a script to completion before serving any
+ * other command, so the whole decision is serialised on the shard.
  */
 
 /**
- * Token Bucket Algorithm - Lua Script
- * Ensures atomic token consumption and refill
+ * Token Bucket.
  *
- * KEYS[1]: Token count key
- * KEYS[2]: Last refill timestamp key
- * ARGV[1]: Max tokens (capacity)
- * ARGV[2]: Refill rate (tokens per second)
- * ARGV[3]: Current timestamp (milliseconds)
- * ARGV[4]: Tokens requested (usually 1)
- * ARGV[5]: Window seconds (TTL)
+ * KEYS[1] token count (stored as a float)
+ * KEYS[2] last-refill timestamp (ms)
+ * ARGV[1] capacity
+ * ARGV[2] refill rate, tokens per second (fractional)
+ * ARGV[3] now (ms)
+ * ARGV[4] tokens requested
+ * ARGV[5] key TTL (seconds)
  *
- * Returns: {allowed (1/0), remaining tokens, reset timestamp}
+ * Returns {allowed, remaining, resetAtMs, retryAfterMs}
+ *
+ * Two properties this implementation is careful about:
+ *
+ *  1. Refill is fractional. Accruing `floor(elapsed * rate)` tokens and then
+ *     advancing the clock to `now` silently discards every sub-token fraction.
+ *     At high request rates the elapsed time between calls is small enough that
+ *     the floor is 0 almost every time, so the bucket refills far slower than
+ *     configured and rejects traffic that is inside its budget. We keep the
+ *     fractional balance in Redis instead.
+ *  2. The clock advances on every call, allowed or not, because the balance is
+ *     always written back. Advancing it only on the allowed path (or only on the
+ *     rejected path) makes the effective rate depend on the accept ratio.
  */
 export const TOKEN_BUCKET_SCRIPT = `
-local tokens_key = KEYS[1]
+local tokens_key    = KEYS[1]
 local timestamp_key = KEYS[2]
-local max_tokens = tonumber(ARGV[1])
-local refill_rate = tonumber(ARGV[2])
-local now = tonumber(ARGV[3])
-local tokens_requested = tonumber(ARGV[4])
-local window_seconds = tonumber(ARGV[5])
+local capacity      = tonumber(ARGV[1])
+local refill_rate   = tonumber(ARGV[2])
+local now           = tonumber(ARGV[3])
+local requested     = tonumber(ARGV[4])
+local ttl           = tonumber(ARGV[5])
 
--- Get current state
-local current_tokens = tonumber(redis.call('GET', tokens_key) or max_tokens)
-local last_refill = tonumber(redis.call('GET', timestamp_key) or now)
-
--- Calculate tokens to add based on time elapsed
-local time_elapsed = (now - last_refill) / 1000
-local tokens_to_add = math.floor(time_elapsed * refill_rate)
-
--- Refill tokens (capped at max_tokens)
-current_tokens = math.min(current_tokens + tokens_to_add, max_tokens)
-
--- Calculate next reset time
-local reset_at = now + (window_seconds * 1000)
-
-if current_tokens >= tokens_requested then
-  -- Consume tokens
-  current_tokens = current_tokens - tokens_requested
-
-  -- Update state
-  redis.call('SET', tokens_key, current_tokens, 'EX', window_seconds)
-  redis.call('SET', timestamp_key, now, 'EX', window_seconds)
-
-  return {1, current_tokens, reset_at}
-else
-  -- Not enough tokens
-  local time_until_token = math.ceil((tokens_requested - current_tokens) / refill_rate)
-  local retry_after = math.max(1, time_until_token)
-
-  return {0, current_tokens, reset_at, retry_after}
+local current = tonumber(redis.call('GET', tokens_key))
+local last    = tonumber(redis.call('GET', timestamp_key))
+if current == nil or last == nil then
+  current = capacity
+  last    = now
 end
+
+local elapsed = math.max(0, now - last) / 1000
+current = math.min(current + elapsed * refill_rate, capacity)
+
+local allowed = 0
+local retry_after_ms = 0
+if current >= requested then
+  allowed = 1
+  current = current - requested
+else
+  retry_after_ms = math.ceil(((requested - current) / refill_rate) * 1000)
+end
+
+redis.call('SET', tokens_key, tostring(current), 'EX', ttl)
+redis.call('SET', timestamp_key, tostring(now), 'EX', ttl)
+
+local reset_at = now + math.ceil(((capacity - current) / refill_rate) * 1000)
+return {allowed, math.floor(current), reset_at, retry_after_ms}
 `;
 
 /**
- * Sliding Window Counter - Lua Script
- * Uses sorted set to track requests within a time window
+ * Sliding Window Log.
  *
- * KEYS[1]: Sorted set key
- * ARGV[1]: Current timestamp (milliseconds)
- * ARGV[2]: Window size (milliseconds)
- * ARGV[3]: Max requests allowed
- * ARGV[4]: Request ID (unique identifier)
- * ARGV[5]: Window seconds (for TTL)
+ * KEYS[1] sorted set of request timestamps
+ * ARGV[1] now (ms)
+ * ARGV[2] window size (ms)
+ * ARGV[3] max requests in the window
+ * ARGV[4] unique member id for this request
  *
- * Returns: {allowed (1/0), current count, reset timestamp}
+ * Returns {allowed, countInWindow, resetAtMs, retryAfterMs}
+ *
+ * Exact, at the cost of one sorted-set member per admitted request. The member
+ * is only added when the request is admitted, so a rejected caller cannot push
+ * its own reset time further out by retrying.
  */
 export const SLIDING_WINDOW_SCRIPT = `
-local key = KEYS[1]
-local now = tonumber(ARGV[1])
-local window_ms = tonumber(ARGV[2])
+local key          = KEYS[1]
+local now          = tonumber(ARGV[1])
+local window_ms    = tonumber(ARGV[2])
 local max_requests = tonumber(ARGV[3])
-local request_id = ARGV[4]
-local window_seconds = tonumber(ARGV[5])
+local member       = ARGV[4]
 
--- Remove old entries outside the window
-local window_start = now - window_ms
-redis.call('ZREMRANGEBYSCORE', key, 0, window_start)
+redis.call('ZREMRANGEBYSCORE', key, 0, now - window_ms)
+local count = redis.call('ZCARD', key)
 
--- Count current requests in window
-local current_count = redis.call('ZCARD', key)
-
--- Calculate reset time
-local reset_at = now + window_ms
-
-if current_count < max_requests then
-  -- Add new request
-  redis.call('ZADD', key, now, request_id)
-  redis.call('EXPIRE', key, window_seconds)
-
-  return {1, current_count + 1, reset_at}
-else
-  -- Get oldest request timestamp for retry-after calculation
-  local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
-  local retry_after = 0
-  if #oldest > 0 then
-    local oldest_timestamp = tonumber(oldest[2])
-    retry_after = math.ceil((oldest_timestamp + window_ms - now) / 1000)
-  end
-
-  return {0, current_count, reset_at, retry_after}
+if count < max_requests then
+  redis.call('ZADD', key, now, member)
+  redis.call('PEXPIRE', key, window_ms)
+  return {1, count + 1, now + window_ms, 0}
 end
+
+-- Capacity frees up when the oldest request in the window ages out.
+local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+local retry_after_ms = window_ms
+if #oldest > 0 then
+  retry_after_ms = math.max(0, math.ceil(tonumber(oldest[2]) + window_ms - now))
+end
+redis.call('PEXPIRE', key, window_ms)
+return {0, count, now + retry_after_ms, retry_after_ms}
 `;
 
 /**
- * Fixed Window Counter - Lua Script
- * Simple counter with fixed time windows
+ * Fixed Window Counter.
  *
- * KEYS[1]: Counter key
- * ARGV[1]: Max requests allowed
- * ARGV[2]: Window seconds
- * ARGV[3]: Current timestamp (milliseconds)
+ * KEYS[1] counter key, already suffixed with the window index by the caller
+ * ARGV[1] max requests
+ * ARGV[2] window size (seconds)
+ * ARGV[3] now (ms)
  *
- * Returns: {allowed (1/0), current count, reset timestamp, retry_after}
+ * Returns {allowed, count, resetAtMs, retryAfterMs}
+ *
+ * The TTL is set to the remaining life of the window rather than a full window,
+ * so a key created near a boundary does not linger for most of the next window.
  */
 export const FIXED_WINDOW_SCRIPT = `
-local key = KEYS[1]
-local max_requests = tonumber(ARGV[1])
+local key            = KEYS[1]
+local max_requests   = tonumber(ARGV[1])
 local window_seconds = tonumber(ARGV[2])
-local now = tonumber(ARGV[3])
+local now            = tonumber(ARGV[3])
 
--- Get current count
-local current = tonumber(redis.call('GET', key) or '0')
+local window_ms = window_seconds * 1000
+local reset_at  = (math.floor(now / window_ms) + 1) * window_ms
+local ttl_ms    = reset_at - now
 
--- Calculate reset time (aligned to window boundary)
-local current_window = math.floor(now / (window_seconds * 1000))
-local reset_at = (current_window + 1) * window_seconds * 1000
-
-if current < max_requests then
-  local new_count = redis.call('INCR', key)
-  if new_count == 1 then
-    redis.call('EXPIRE', key, window_seconds)
-  end
-
-  return {1, new_count, reset_at}
-else
-  local ttl = redis.call('TTL', key)
-  local retry_after = math.max(1, ttl)
-
-  return {0, current, reset_at, retry_after}
+local count = tonumber(redis.call('GET', key) or '0')
+if count < max_requests then
+  count = redis.call('INCR', key)
+  redis.call('PEXPIRE', key, ttl_ms)
+  return {1, count, reset_at, 0}
 end
+
+redis.call('PEXPIRE', key, ttl_ms)
+return {0, count, reset_at, ttl_ms}
 `;
 
 /**
- * Reset rate limit - Lua Script
- * Deletes all keys associated with a rate limit
- *
- * KEYS: Array of keys to delete
- *
- * Returns: Number of keys deleted
+ * Deletes every key passed in KEYS. Used by reset(), which always knows the
+ * exact key names it needs to drop -- no KEYS/SCAN pattern sweep on the data path.
  */
 export const RESET_SCRIPT = `
 local deleted = 0

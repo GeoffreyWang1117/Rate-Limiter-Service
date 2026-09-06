@@ -1,174 +1,72 @@
 import { IRateLimitAlgorithm, RateLimitCheckResult } from '../types';
 import redisService from '../services/redis.service';
 import { SLIDING_WINDOW_SCRIPT } from '../scripts/lua-scripts';
-import logger from '../utils/logger';
-import { v4 as uuidv4 } from 'uuid';
+import { RedisScript } from './script-runner';
+
+const script = new RedisScript(SLIDING_WINDOW_SCRIPT, 1, 'sliding_window');
+
+/** Process-local counter; only has to be unique within one millisecond per process. */
+let sequence = 0;
 
 /**
- * Sliding Window Counter Algorithm Implementation
+ * Sliding window log.
  *
- * Best for: Precise rate limiting with smooth distribution
- * Characteristics:
- * - Uses sorted set to track individual requests
- * - More accurate than fixed window
- * - No boundary issues
- * - Higher memory usage (stores each request)
+ * Exact: it stores one sorted-set member per admitted request, so there is no
+ * boundary burst. Costs `limit` members of memory per key, which is why the
+ * fixed window still exists for very large limits.
+ *
+ * Members used to be UUIDv4 (36 bytes each, plus generation cost on every
+ * request). A per-process `${timestamp}-${pid}-${seq}` is unique across
+ * replicas for a fraction of the size.
  */
 export class SlidingWindowAlgorithm implements IRateLimitAlgorithm {
-  private scriptSha: string | null = null;
-
-  constructor() {
-    this.initializeScript();
-  }
-
-  private async initializeScript(): Promise<void> {
-    try {
-      const redis = redisService.getClient();
-      this.scriptSha = await redis.script('LOAD', SLIDING_WINDOW_SCRIPT);
-      logger.info('Sliding Window Lua script loaded', { sha: this.scriptSha });
-    } catch (error) {
-      logger.error('Failed to load Sliding Window Lua script:', error);
-    }
+  private key(key: string): string {
+    return `rate_limit:sliding_window:${key}`;
   }
 
   async check(
     key: string,
     limit: number,
-    windowSeconds: number
+    windowSeconds: number,
+    cost = 1
   ): Promise<RateLimitCheckResult> {
-    const redis = redisService.getClient();
+    // A sliding-window *log* counts requests, not units of work. Callers that
+    // need weighted cost should use the token bucket.
+    if (cost !== 1) {
+      throw new Error('sliding_window does not support a cost other than 1');
+    }
     const now = Date.now();
     const windowMs = windowSeconds * 1000;
-    const redisKey = `rate_limit:sliding_window:${key}`;
-    const requestId = uuidv4();
+    const member = `${now}-${process.pid}-${sequence++}`;
 
-    try {
-      let result: number[];
+    const [allowed, count, resetAt, retryAfterMs] = await script.run(
+      [this.key(key)],
+      [now, windowMs, limit, member]
+    );
 
-      if (this.scriptSha) {
-        try {
-          result = (await redis.evalsha(
-            this.scriptSha,
-            1,
-            redisKey,
-            now.toString(),
-            windowMs.toString(),
-            limit.toString(),
-            requestId,
-            windowSeconds.toString()
-          )) as number[];
-        } catch (error) {
-          logger.warn('Script SHA not found, reloading...');
-          this.scriptSha = null;
-          result = await this.executeScript(
-            redis,
-            redisKey,
-            now,
-            windowMs,
-            limit,
-            requestId,
-            windowSeconds
-          );
-        }
-      } else {
-        result = await this.executeScript(
-          redis,
-          redisKey,
-          now,
-          windowMs,
-          limit,
-          requestId,
-          windowSeconds
-        );
-      }
-
-      const allowed = result[0] === 1;
-      const currentCount = Math.floor(result[1]);
-      const resetAt = Math.floor(result[2]);
-      const retryAfter = result[3] ? Math.floor(result[3]) : undefined;
-
-      logger.debug('Sliding Window check result', {
-        key,
-        allowed,
-        currentCount,
-        remaining: limit - currentCount,
-        resetAt,
-        retryAfter,
-      });
-
-      return {
-        allowed,
-        limit,
-        remaining: Math.max(0, limit - currentCount),
-        resetAt,
-        retryAfter,
-      };
-    } catch (error) {
-      logger.error('Sliding Window check failed:', error);
-      throw error;
-    }
-  }
-
-  private async executeScript(
-    redis: any,
-    redisKey: string,
-    now: number,
-    windowMs: number,
-    limit: number,
-    requestId: string,
-    windowSeconds: number
-  ): Promise<number[]> {
-    const result = (await redis.eval(
-      SLIDING_WINDOW_SCRIPT,
-      1,
-      redisKey,
-      now.toString(),
-      windowMs.toString(),
-      limit.toString(),
-      requestId,
-      windowSeconds.toString()
-    )) as number[];
-
-    if (!this.scriptSha) {
-      this.scriptSha = await redis.script('LOAD', SLIDING_WINDOW_SCRIPT);
-    }
-
-    return result;
+    return {
+      allowed: allowed === 1,
+      limit,
+      remaining: Math.max(0, limit - count),
+      resetAt,
+      ...(allowed === 0 && { retryAfter: Math.max(1, Math.ceil(retryAfterMs / 1000)) }),
+      retryAfterMs: allowed === 0 ? retryAfterMs : undefined,
+    };
   }
 
   async reset(key: string): Promise<void> {
-    const redis = redisService.getClient();
-    const redisKey = `rate_limit:sliding_window:${key}`;
-
-    await redis.del(redisKey);
-    logger.info('Sliding Window reset', { key });
+    await redisService.getClient().del(this.key(key));
   }
 
   async getStats(key: string): Promise<{ count: number; resetAt: number } | null> {
     const redis = redisService.getClient();
-    const redisKey = `rate_limit:sliding_window:${key}`;
+    const redisKey = this.key(key);
+    const [count, pttl] = await Promise.all([redis.zcard(redisKey), redis.pttl(redisKey)]);
+    if (count === 0) return null;
+    return { count, resetAt: Date.now() + Math.max(0, pttl) };
+  }
 
-    try {
-      const now = Date.now();
-      const count = await redis.zcard(redisKey);
-
-      if (count === 0) {
-        return null;
-      }
-
-      // Get the oldest entry to determine reset time
-      const oldest = await redis.zrange(redisKey, 0, 0, 'WITHSCORES');
-      const ttl = await redis.ttl(redisKey);
-
-      const resetAt = now + ttl * 1000;
-
-      return {
-        count,
-        resetAt,
-      };
-    } catch (error) {
-      logger.error('Failed to get Sliding Window stats:', error);
-      return null;
-    }
+  async warm(): Promise<void> {
+    await script.load();
   }
 }

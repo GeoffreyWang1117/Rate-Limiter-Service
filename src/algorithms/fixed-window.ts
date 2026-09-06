@@ -1,174 +1,88 @@
 import { IRateLimitAlgorithm, RateLimitCheckResult } from '../types';
 import redisService from '../services/redis.service';
 import { FIXED_WINDOW_SCRIPT } from '../scripts/lua-scripts';
-import logger from '../utils/logger';
+import { RedisScript } from './script-runner';
+
+const script = new RedisScript(FIXED_WINDOW_SCRIPT, 1, 'fixed_window');
 
 /**
- * Fixed Window Counter Algorithm Implementation
+ * Fixed window counter.
  *
- * Best for: Simple, efficient rate limiting
- * Characteristics:
- * - Very low memory usage (single counter per window)
- * - Simple and fast
- * - Potential burst at window boundaries
- * - Good for most use cases
+ * One integer per key per window. Cheapest of the three, and the only one whose
+ * memory does not grow with the limit -- but it permits up to 2x the limit
+ * across a window boundary, so it is the wrong choice for a hard quota.
+ *
+ * reset() and getStats() derive the window key arithmetically. They used to
+ * discover keys with `KEYS rate_limit:fixed_window:<key>:*`, which is an O(N)
+ * scan of the entire keyspace that blocks the Redis event loop -- on a shard
+ * holding the working set of a high-throughput gateway, that is a stall for
+ * every other tenant on the shard.
  */
 export class FixedWindowAlgorithm implements IRateLimitAlgorithm {
-  private scriptSha: string | null = null;
-
-  constructor() {
-    this.initializeScript();
+  private windowIndex(now: number, windowSeconds: number): number {
+    return Math.floor(now / (windowSeconds * 1000));
   }
 
-  private async initializeScript(): Promise<void> {
-    try {
-      const redis = redisService.getClient();
-      this.scriptSha = await redis.script('LOAD', FIXED_WINDOW_SCRIPT);
-      logger.info('Fixed Window Lua script loaded', { sha: this.scriptSha });
-    } catch (error) {
-      logger.error('Failed to load Fixed Window Lua script:', error);
-    }
+  private key(key: string, windowIndex: number): string {
+    return `rate_limit:fixed_window:${key}:${windowIndex}`;
   }
 
   async check(
     key: string,
     limit: number,
-    windowSeconds: number
-  ): Promise<RateLimitCheckResult> {
-    const redis = redisService.getClient();
-    const now = Date.now();
-
-    // Create window-aligned key
-    const currentWindow = Math.floor(now / (windowSeconds * 1000));
-    const redisKey = `rate_limit:fixed_window:${key}:${currentWindow}`;
-
-    try {
-      let result: number[];
-
-      if (this.scriptSha) {
-        try {
-          result = (await redis.evalsha(
-            this.scriptSha,
-            1,
-            redisKey,
-            limit.toString(),
-            windowSeconds.toString(),
-            now.toString()
-          )) as number[];
-        } catch (error) {
-          logger.warn('Script SHA not found, reloading...');
-          this.scriptSha = null;
-          result = await this.executeScript(
-            redis,
-            redisKey,
-            limit,
-            windowSeconds,
-            now
-          );
-        }
-      } else {
-        result = await this.executeScript(redis, redisKey, limit, windowSeconds, now);
-      }
-
-      const allowed = result[0] === 1;
-      const currentCount = Math.floor(result[1]);
-      const resetAt = Math.floor(result[2]);
-      const retryAfter = result[3] ? Math.floor(result[3]) : undefined;
-
-      logger.debug('Fixed Window check result', {
-        key,
-        allowed,
-        currentCount,
-        remaining: limit - currentCount,
-        resetAt,
-        retryAfter,
-      });
-
-      return {
-        allowed,
-        limit,
-        remaining: Math.max(0, limit - currentCount),
-        resetAt,
-        retryAfter,
-      };
-    } catch (error) {
-      logger.error('Fixed Window check failed:', error);
-      throw error;
-    }
-  }
-
-  private async executeScript(
-    redis: any,
-    redisKey: string,
-    limit: number,
     windowSeconds: number,
-    now: number
-  ): Promise<number[]> {
-    const result = (await redis.eval(
-      FIXED_WINDOW_SCRIPT,
-      1,
-      redisKey,
-      limit.toString(),
-      windowSeconds.toString(),
-      now.toString()
-    )) as number[];
-
-    if (!this.scriptSha) {
-      this.scriptSha = await redis.script('LOAD', FIXED_WINDOW_SCRIPT);
+    cost = 1
+  ): Promise<RateLimitCheckResult> {
+    if (cost !== 1) {
+      throw new Error('fixed_window does not support a cost other than 1');
     }
-
-    return result;
-  }
-
-  async reset(key: string): Promise<void> {
-    const redis = redisService.getClient();
-    const pattern = `rate_limit:fixed_window:${key}:*`;
-
-    // Find all window keys for this identifier
-    const keys = await redis.keys(pattern);
-
-    if (keys.length > 0) {
-      await redis.del(...keys);
-    }
-
-    logger.info('Fixed Window reset', { key, keysDeleted: keys.length });
-  }
-
-  async getStats(key: string): Promise<{ count: number; resetAt: number } | null> {
-    const redis = redisService.getClient();
     const now = Date.now();
+    const redisKey = this.key(key, this.windowIndex(now, windowSeconds));
 
-    // Find the current window key
-    const pattern = `rate_limit:fixed_window:${key}:*`;
-    const keys = await redis.keys(pattern);
+    const [allowed, count, resetAt, retryAfterMs] = await script.run(
+      [redisKey],
+      [limit, windowSeconds, now]
+    );
 
-    if (keys.length === 0) {
-      return null;
-    }
+    return {
+      allowed: allowed === 1,
+      limit,
+      remaining: Math.max(0, limit - count),
+      resetAt,
+      ...(allowed === 0 && { retryAfter: Math.max(1, Math.ceil(retryAfterMs / 1000)) }),
+      retryAfterMs: allowed === 0 ? retryAfterMs : undefined,
+    };
+  }
 
-    // Get the most recent window
-    const sortedKeys = keys.sort().reverse();
-    const currentKey = sortedKeys[0];
+  /**
+   * Drops the current and previous window. Those are the only two that can still
+   * be consulted: older windows have already expired, and the next one does not
+   * exist yet.
+   */
+  async reset(key: string, windowSeconds = 60): Promise<void> {
+    const index = this.windowIndex(Date.now(), windowSeconds);
+    await redisService
+      .getClient()
+      .del(this.key(key, index), this.key(key, index - 1));
+  }
 
-    try {
-      const [count, ttl] = await Promise.all([
-        redis.get(currentKey),
-        redis.ttl(currentKey),
-      ]);
+  async getStats(
+    key: string,
+    windowSeconds = 60
+  ): Promise<{ count: number; resetAt: number } | null> {
+    const now = Date.now();
+    const redis = redisService.getClient();
+    const redisKey = this.key(key, this.windowIndex(now, windowSeconds));
+    const count = await redis.get(redisKey);
+    if (count === null) return null;
+    const windowMs = windowSeconds * 1000;
+    return {
+      count: parseInt(count, 10),
+      resetAt: (this.windowIndex(now, windowSeconds) + 1) * windowMs,
+    };
+  }
 
-      if (!count) {
-        return null;
-      }
-
-      const resetAt = now + ttl * 1000;
-
-      return {
-        count: parseInt(count, 10),
-        resetAt,
-      };
-    } catch (error) {
-      logger.error('Failed to get Fixed Window stats:', error);
-      return null;
-    }
+  async warm(): Promise<void> {
+    await script.load();
   }
 }
