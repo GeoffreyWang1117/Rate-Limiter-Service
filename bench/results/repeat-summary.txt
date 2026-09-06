@@ -1,0 +1,22 @@
+  sweep 1 of 5 ...
+  sweep 2 of 5 ...
+  sweep 3 of 5 ...
+  sweep 4 of 5 ...
+  sweep 5 of 5 ...
+
+Admission decision cost, 5 sweeps, median and range across runs
+
+   offered  achieved   p50 med     p50 range   p95 med     p95 range   p99 med       p99 range  p99 spread
+  --------------------------------------------------------------------------------------------------------
+       250       250      0.43     0.42-0.43      0.55     0.52-0.56      0.70       0.65-0.71        1.1x
+       500       500      0.41     0.40-0.41      0.52     0.49-0.53      0.61       0.59-0.63        1.1x
+      1000      1000      0.44     0.43-0.45      0.59     0.58-0.60      0.73       0.71-0.89        1.3x
+      1500      1500      0.47     0.45-0.51      0.70     0.69-0.77      1.09       0.91-2.51        2.8x
+      2000      2000      0.63     0.61-0.63      0.91     0.89-1.20      1.48       1.44-6.05        4.2x
+      2500      2499      0.72     0.71-0.73      1.30     1.20-1.61      6.91      2.87-29.01       10.1x
+      3000      2999      0.72     0.69-0.75      2.08     1.45-5.92      9.55      3.23-17.99        5.6x
+
+  p99 spread is max/min across sweeps. A figure near 1 means the number is
+  a property of the service; a large one means it is a property of whatever
+  else the machine was doing, and should not be quoted as a result.
+

@@ -1,0 +1,30 @@
+
+Benchmark B -- worst-case vs adaptive reservation
+
+  budget            400,000 tokens/minute
+  burst             400 requests arriving together
+  declared ceiling  4096 output tokens
+  workload          prompt ~900 tokens, output log-normal (median 900, sigma 0.9)  [assumption, not a trace]
+  per request       5344 tokens declared, 2460 actually used (54.0% of the declaration is never generated)
+
+  worst_case  calibrating ... burst ... done
+  adaptive    calibrating ... burst ... done
+
+how much of the burst fits in the budget
+
+        mode  admitted  shed  admitted %  mean held  mean used  held but unused %
+  ----------  --------  ----  ----------  ---------  ---------  -----------------
+  worst_case        75   325        18.8       5341       2289               57.1
+    adaptive       112   288        28.0       3563       2308               35.2
+
+what adaptive gives up for it
+
+        mode  overruns  overrun %  overrun tokens  as % of used
+  ----------  --------  ---------  --------------  ------------
+  worst_case         0       0.00               0          0.00
+    adaptive        11       9.82            8813          3.41
+
+  adaptive admitted 1.49x as much of the burst from the same budget,
+  and overran on 11 of 112 admitted requests (9.82%).
+  Overruns are charged at commit, so they are paid for -- they are not a way past the budget.
+

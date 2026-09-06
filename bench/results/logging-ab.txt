@@ -1,0 +1,12 @@
+Per-request logging A/B, 4 runs at 2500 cycles/s, 20s each, LOG_LEVEL=info
+
+  arm                        p99 (ms)              cpu (% of a core)   log lines
+  -------------------------  --------------------  ------------------  ---------
+  B  a line per request      238.99 6.71 21.39 7.35  103 97 98 98        101,203
+  A  histogram (default)      10.15 17.57 17.93 4.98   91 91 89 89              1
+
+  The p99 columns overlap: at this rate the tail on this host moves more
+  between runs of the same arm than it does between arms, so the latency
+  effect is not separable from contention. CPU and log volume are.
+
+  Reproduce: bench/logging-ab.sh 2500 20

@@ -1,0 +1,5 @@
+ 10:13:40 up 21 days, 23:50, 10 users,  load average: 4.95, 5.29, 4.99
+ 10:16:26 up 21 days, 23:52, 10 users,  load average: 4.06, 4.73, 4.83
+ 10:19:12 up 21 days, 23:55, 10 users,  load average: 5.17, 4.63, 4.75
+ 10:21:58 up 21 days, 23:58, 10 users,  load average: 4.69, 4.42, 4.63
+ 10:24:44 up 22 days, 1 min, 10 users,  load average: 5.78, 4.90, 4.77

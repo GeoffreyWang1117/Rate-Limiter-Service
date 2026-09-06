@@ -1,0 +1,24 @@
+
+Benchmark A -- admission decision cost
+target http://127.0.0.1:3055   20s per rate   open loop
+
+  warming up ... done
+
+   2500 req/s ... done  (50000 admitted, 0 shed)
+
+reserve latency (ms) -- the phase that sits between a user and their first token
+
+  offered rps  achieved rps      n   p50   p95   p99  p99.9     max  admitted  shed  errors
+  -----------  ------------  -----  ----  ----  ----  -----  ------  --------  ----  ------
+         2500          2499  50000  0.71  1.20  4.58  73.99  105.82     50000     0       0
+
+commit latency (ms) -- off the critical path, after generation finishes
+
+  offered rps      n   p50   p95   p99    max
+  -----------  -----  ----  ----  ----  -----
+         2500  50000  0.57  1.18  2.75  18.08
+
+node v26.7.0  platform linux  cpus 32
+load average 4.36 4.43 4.69  (a 1-minute figure near or above the core count means this run was contended)
+single host, loopback: no network between client, gateway and Redis.
+
