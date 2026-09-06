@@ -1,54 +1,54 @@
-# Multi-stage build for production
-FROM node:18-alpine AS builder
+# syntax=docker/dockerfile:1
 
+# ---- build ----------------------------------------------------------------
+FROM node:22-alpine AS builder
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
-COPY tsconfig.json ./
+# Dependencies are copied and installed before the source, so an edit to src/
+# reuses the cached install layer instead of refetching the whole tree.
+COPY package*.json tsconfig.json ./
+RUN npm ci
 
-# Install dependencies
-RUN npm ci --only=production && \
-    npm ci --only=development
-
-# Copy source code
 COPY src ./src
-
-# Build TypeScript
 RUN npm run build
 
-# Production stage
-FROM node:18-alpine
+# ---- production dependencies ----------------------------------------------
+# A separate stage so the runtime image gets a node_modules that never contained
+# dev dependencies, rather than one pruned after the fact.
+FROM node:22-alpine AS deps
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev && npm cache clean --force
 
+# ---- runtime ---------------------------------------------------------------
+FROM node:22-alpine
 WORKDIR /app
 
-# Install dumb-init for proper signal handling
-RUN apk add --no-cache dumb-init
-
-# Create non-root user
-RUN addgroup -g 1001 -S nodejs && \
+# PID 1 in a container does not reap children or forward signals by default, so
+# SIGTERM from an orchestrator would never reach the graceful-shutdown handler
+# and every deploy would end in a 30-second kill.
+# Pinned so a rebuild of this Dockerfile produces the same runtime, which is
+# the whole point of building it from a Dockerfile.
+RUN apk add --no-cache dumb-init=1.2.5-r3 && \
+    addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001
 
-# Copy package files and install production dependencies only
-COPY package*.json ./
-RUN npm ci --only=production && \
-    npm cache clean --force
-
-# Copy built application from builder
+COPY --from=deps  --chown=nodejs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nodejs:nodejs /app/dist ./dist
+COPY --chown=nodejs:nodejs package.json ./
 
-# Switch to non-root user
-USER nodejs
+# Numeric, not `nodejs`: Kubernetes `runAsNonRoot` cannot verify a name and
+# refuses to start the pod, so a named USER fails at deploy time rather than
+# at build time.
+USER 1001
+ENV NODE_ENV=production
 
-# Expose ports
-EXPOSE 3000 9090
+# Metrics are served on the main port. The image used to also EXPOSE 9090, a
+# port nothing ever bound.
+EXPOSE 3000
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD node -e "require('http').get('http://localhost:3000/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
+    CMD ["node", "-e", "require('http').get('http://127.0.0.1:'+(process.env.PORT||3000)+'/health/ready',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
 
-# Use dumb-init to handle signals properly
 ENTRYPOINT ["dumb-init", "--"]
-
-# Start the application
 CMD ["node", "dist/index.js"]

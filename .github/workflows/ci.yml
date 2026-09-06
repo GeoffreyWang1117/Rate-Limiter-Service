@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# Without this the workflow inherits the repository default, which on many
+# repositories is write-all. Nothing here writes anything back.
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    # The test suite runs against a real Redis and a real Postgres, not mocks.
+    # Every property worth checking here -- fractional token accrual, TTL
+    # arithmetic, atomicity under concurrency, Lua number coercion, the SQL the
+    # repositories actually emit -- lives inside those servers. A mocked client
+    # can only confirm that we passed the arguments we meant to pass.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 3s
+          --health-retries 5
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: rate_limiter
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: 6379
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: rate_limiter
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Apply schema
+        run: node dist/scripts/migrate.js up
+
+      - name: Test
+        run: npm test
+
+      - name: Smoke test the built service
+        # Proves the compiled artifact boots, connects to both dependencies and
+        # serves a real admission decision. The unit suite builds the Express app
+        # in-process, so it would not catch a broken entrypoint or a bad build
+        # output path -- which is how the previous version shipped a service that
+        # had never once been started.
+        run: |
+          node dist/index.js &
+          SERVICE_PID=$!
+          trap 'kill $SERVICE_PID 2>/dev/null || true' EXIT
+
+          for _ in $(seq 1 40); do
+            curl -sf http://127.0.0.1:3000/health/ready >/dev/null && break
+            sleep 0.5
+          done
+          curl -sf http://127.0.0.1:3000/health | tee /dev/stderr | grep -q '"redis":"up"'
+          curl -sf http://127.0.0.1:3000/health | grep -q '"postgres":"up"'
+
+          DECISION=$(curl -sf -X POST http://127.0.0.1:3000/api/v1/llm/reserve \
+            -H 'Content-Type: application/json' \
+            -d '{"tenant":"ci","model":"ci-model","promptTokens":100,"maxOutputTokens":200}')
+          echo "$DECISION"
+          echo "$DECISION" | grep -q '"decision":"admit"'
+
+          curl -sf http://127.0.0.1:3000/metrics | grep -q llm_admission_decisions_total
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The image build compiles TypeScript, so a type error fails here too --
+      # which is what the original Dockerfile would have done, had anyone built it.
+      - run: docker build -t rate-limiter-gateway:ci .

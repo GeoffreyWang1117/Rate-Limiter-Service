@@ -1,125 +1,155 @@
-version: '3.8'
-
+# Local stack. `scripts/devstack.sh` is the no-Docker equivalent for machines
+# without a container runtime; both serve Redis on the port the app expects and
+# run the same migrations.
 services:
-  # Rate Limiter Service
-  rate-limiter:
+  gateway:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: rate-limiter-service
+    container_name: rate-limiter-gateway
     ports:
-      - "3000:3000"
-      - "9090:9090"
+      - '${GATEWAY_BIND:-127.0.0.1}:3000:3000'
     environment:
-      - NODE_ENV=production
-      - PORT=3000
-      - HOST=0.0.0.0
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_DB=0
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=rate_limiter
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - DEFAULT_RATE_LIMIT=1000
-      - DEFAULT_WINDOW_SECONDS=60
-      - DEFAULT_ALGORITHM=token_bucket
-      - ENABLE_METRICS=true
-      - METRICS_PORT=9090
-      - LOG_LEVEL=info
-      - LOG_FORMAT=json
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: rate_limiter
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set it in .env; see .env.example}
+      # No default, deliberately. The app already fails closed -- it returns 503
+      # from the control plane when this is unset under NODE_ENV=production. A
+      # `:-local-dev-key` default here defeated exactly that guard: `docker
+      # compose up` then produced a production-mode gateway whose admin
+      # credential was a string published in this repository, listening on a
+      # port bound to every interface. Verified: that key authenticated, and a
+      # POST with it raised a tenant to 99,000,000 tokens/minute.
+      #
+      # `:?` makes compose refuse to start rather than substitute something.
+      CONTROL_PLANE_API_KEY: ${CONTROL_PLANE_API_KEY:?set it in .env; see .env.example}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set it in .env; see .env.example}
+      RATE_LIMIT_FAILURE_MODE: fail_open
+      ADMISSION_FAILURE_MODE: fail_closed
+      LOG_LEVEL: info
     depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    networks:
-      - rate-limiter-network
+      redis: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    networks: [rate-limiter]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
-      interval: 30s
-      timeout: 10s
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://127.0.0.1:3000/health/ready',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
       retries: 3
-      start_period: 40s
+      start_period: 20s
 
-  # Redis
+  # Schema is applied by a one-shot job that must exit successfully before the
+  # gateway starts, rather than by the gateway itself. Migrating from inside the
+  # app means every replica races to apply the same DDL on every rollout.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rate-limiter-migrate
+    command: ['node', 'dist/scripts/migrate.js', 'up']
+    environment:
+      NODE_ENV: production
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: rate_limiter
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set it in .env; see .env.example}
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [rate-limiter]
+    restart: 'no'
+
   redis:
     image: redis:7-alpine
     container_name: rate-limiter-redis
-    ports:
-      - "6379:6379"
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
-    volumes:
-      - redis-data:/data
-    networks:
-      - rate-limiter-network
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set it in .env; see .env.example}
+    ports: ['127.0.0.1:6379:6379']
+    # allkeys-lru would evict live rate-limit counters under memory pressure,
+    # silently resetting budgets. noeviction makes the limiter fail loudly
+    # instead of quietly stopping limiting.
+    command: >
+      redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy noeviction
+      --requirepass ${REDIS_PASSWORD:?set it in .env; see .env.example}
+    volumes: ['redis-data:/data']
+    networks: [rate-limiter]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ['CMD-SHELL', 'redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
       interval: 10s
       timeout: 3s
       retries: 3
 
-  # PostgreSQL
   postgres:
     image: postgres:16-alpine
     container_name: rate-limiter-postgres
-    ports:
-      - "5432:5432"
+    ports: ['127.0.0.1:5432:5432']
     environment:
-      - POSTGRES_DB=rate_limiter
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    networks:
-      - rate-limiter-network
+      POSTGRES_DB: rate_limiter
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set it in .env; see .env.example}
+    volumes: ['postgres-data:/var/lib/postgresql/data']
+    networks: [rate-limiter]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d rate_limiter']
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Prometheus (optional - for monitoring)
+  # Redis speaks RESP, not HTTP. Prometheus used to be pointed straight at
+  # redis:6379 and scraped nothing at all; this is what actually exports it.
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: rate-limiter-redis-exporter
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set it in .env; see .env.example}
+    ports: ['127.0.0.1:9121:9121']
+    depends_on: [redis]
+    networks: [rate-limiter]
+    restart: unless-stopped
+
   prometheus:
     image: prom/prometheus:latest
     container_name: rate-limiter-prometheus
-    ports:
-      - "9091:9090"
+    ports: ['127.0.0.1:9091:9090']
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
-    networks:
-      - rate-limiter-network
+    networks: [rate-limiter]
     restart: unless-stopped
 
-  # Grafana (optional - for dashboards)
   grafana:
     image: grafana/grafana:latest
     container_name: rate-limiter-grafana
-    ports:
-      - "3001:3000"
+    ports: ['127.0.0.1:3001:3000']
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
-    volumes:
-      - grafana-data:/var/lib/grafana
-    networks:
-      - rate-limiter-network
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set it in .env; see .env.example}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+    volumes: ['grafana-data:/var/lib/grafana']
+    networks: [rate-limiter]
+    depends_on: [prometheus]
     restart: unless-stopped
-    depends_on:
-      - prometheus
 
 networks:
-  rate-limiter-network:
+  rate-limiter:
     driver: bridge
 
 volumes:

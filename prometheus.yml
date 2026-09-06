@@ -5,15 +5,21 @@ global:
     monitor: 'rate-limiter-monitor'
 
 scrape_configs:
+  # The service exposes /metrics on its main HTTP port. The previous config
+  # scraped :9090, a port nothing ever listened on -- the dashboards it fed had
+  # been empty since the day they were written.
   - job_name: 'rate-limiter-service'
+    metrics_path: /metrics
     static_configs:
-      - targets: ['rate-limiter:9090']
+      - targets: ['gateway:3000']
         labels:
           service: 'rate-limiter'
-          environment: 'production'
 
+  # Redis speaks RESP, not HTTP; scraping it directly yields nothing. Reaching
+  # Redis metrics needs redis_exporter alongside it, which docker-compose.yml
+  # now runs.
   - job_name: 'redis'
     static_configs:
-      - targets: ['redis:6379']
+      - targets: ['redis-exporter:9121']
         labels:
           service: 'redis'
