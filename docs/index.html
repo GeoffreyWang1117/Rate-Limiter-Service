@@ -1,0 +1,915 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM Admission Gateway</title>
+<meta name="description" content="Token-aware admission control for LLM inference: reserve, commit and reclaim, with a live protocol simulator and measured results.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500&display=swap">
+<style>
+:root{
+  --ground:#FCFBF9; --surface:#FFFFFF; --surface-2:#F4F1EB;
+  --ink:#1A1814; --ink-2:#4A443A; --muted:#6F675B; --line:#E4DFD5; --line-2:#CFC8BA;
+  --held:#A86F14; --held-bg:#F6E9D2;
+  --admit:#276B5C; --admit-bg:#D9EBE6;
+  --shed:#A63A29; --shed-bg:#F6DED9;
+  --reclaim:#5C4F96; --reclaim-bg:#E3DEF3;
+  --spent:#C3BCAE;
+  --shadow:0 1px 2px rgba(26,24,20,.05), 0 10px 28px -16px rgba(26,24,20,.22);
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,sans-serif;
+  --cond:"IBM Plex Sans Condensed","IBM Plex Sans",system-ui,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#141310; --surface:#1C1A16; --surface-2:#242119;
+    --ink:#EFECE5; --ink-2:#C6C0B4; --muted:#968F82; --line:#2F2B23; --line-2:#433D32;
+    --held:#D79A3A; --held-bg:#3A2D14;
+    --admit:#5FB5A0; --admit-bg:#16302A;
+    --shed:#DE7A66; --shed-bg:#3A1D17;
+    --reclaim:#9C8BDD; --reclaim-bg:#241E3D;
+    --spent:#4A443A;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -16px rgba(0,0,0,.6);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#141310; --surface:#1C1A16; --surface-2:#242119;
+  --ink:#EFECE5; --ink-2:#C6C0B4; --muted:#968F82; --line:#2F2B23; --line-2:#433D32;
+  --held:#D79A3A; --held-bg:#3A2D14;
+  --admit:#5FB5A0; --admit-bg:#16302A;
+  --shed:#DE7A66; --shed-bg:#3A1D17;
+  --reclaim:#9C8BDD; --reclaim-bg:#241E3D;
+  --spent:#4A443A;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -16px rgba(0,0,0,.6);
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:var(--sans); font-size:16px; line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1080px; margin:0 auto; padding-inline:20px; padding-block:0}
+.prose{max-width:66ch}
+h1,h2,h3{font-family:var(--cond); font-weight:600; line-height:1.15; text-wrap:balance; margin:0}
+h1{font-size:clamp(2.1rem,5.4vw,3.1rem); letter-spacing:-.012em; font-weight:700}
+h2{font-size:clamp(1.35rem,3vw,1.7rem); letter-spacing:-.006em}
+h3{font-size:1.05rem; letter-spacing:.002em}
+p{margin:0}
+a{color:var(--ink); text-decoration-color:var(--line-2); text-underline-offset:3px}
+a:hover{text-decoration-color:var(--held)}
+code,.mono{font-family:var(--mono); font-size:.88em; font-variant-numeric:tabular-nums}
+.eyebrow{
+  font-family:var(--mono); font-size:.72rem; font-weight:500;
+  letter-spacing:.14em; text-transform:uppercase; color:var(--muted);
+}
+.lede{font-size:1.11rem; color:var(--ink-2)}
+.muted{color:var(--muted)}
+.stack{display:flex; flex-direction:column}
+.g8{gap:8px}.g12{gap:12px}.g16{gap:16px}.g24{gap:24px}.g32{gap:32px}
+
+/* ---------- header ---------- */
+header.top{border-bottom:1px solid var(--line); background:var(--surface)}
+.topbar{display:flex; align-items:center; justify-content:space-between; gap:16px; padding-block:14px; flex-wrap:wrap}
+.brand{font-family:var(--cond); font-weight:700; letter-spacing:-.01em; font-size:1.02rem}
+.brand span{color:var(--held)}
+.toplinks{display:flex; gap:18px; font-family:var(--mono); font-size:.8rem}
+.toplinks a{color:var(--ink-2); text-decoration:none; border-bottom:1px solid transparent; padding-bottom:1px}
+.toplinks a:hover{border-bottom-color:var(--held); color:var(--ink)}
+
+.hero{padding-block:52px 40px; border-bottom:1px solid var(--line)}
+.hero .lede{margin-top:18px}
+.thesis{
+  margin-top:26px; padding:16px 18px; border-left:3px solid var(--held);
+  background:var(--surface); font-size:1rem; color:var(--ink-2);
+}
+.thesis strong{color:var(--ink); font-weight:600}
+
+section{padding-block:44px; border-bottom:1px solid var(--line)}
+.sechead{display:flex; flex-direction:column; gap:10px; margin-bottom:22px}
+
+/* ---------- phase strip ---------- */
+.phases{display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--line); border:1px solid var(--line); margin-top:8px}
+.phase{background:var(--surface); padding:18px}
+.phase .n{font-family:var(--mono); font-size:.74rem; color:var(--muted); letter-spacing:.1em}
+.phase h3{margin-top:6px}
+.phase p{margin-top:8px; font-size:.93rem; color:var(--ink-2)}
+.phase.p1{border-top:3px solid var(--held)}
+.phase.p2{border-top:3px solid var(--admit)}
+.phase.p3{border-top:3px solid var(--reclaim)}
+
+/* ---------- simulator ---------- */
+.sim{display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:20px; align-items:start}
+.panel{background:var(--surface); border:1px solid var(--line); box-shadow:var(--shadow)}
+.panel-hd{
+  display:flex; align-items:baseline; justify-content:space-between; gap:12px;
+  padding:12px 16px; border-bottom:1px solid var(--line); background:var(--surface-2);
+}
+.panel-hd .t{font-family:var(--cond); font-weight:600; font-size:.98rem}
+.panel-bd{padding:16px}
+
+.budget-label{display:flex; justify-content:space-between; align-items:baseline; font-family:var(--mono); font-size:.78rem; color:var(--muted); margin-bottom:7px}
+.budget-label b{color:var(--ink); font-weight:600; font-size:.92rem}
+.bar{height:26px; display:flex; background:var(--surface-2); border:1px solid var(--line); overflow:hidden}
+.bar.thin{height:12px}
+.bar div{transition:width .28s cubic-bezier(.4,0,.2,1)}
+.seg-free{background:var(--admit-bg)}
+.seg-held{background:var(--held); background-image:repeating-linear-gradient(135deg,transparent 0 5px,rgba(255,255,255,.22) 5px 10px)}
+.seg-spent{background:var(--spent)}
+.seg-debt{background:var(--shed)}
+.legend{display:flex; flex-wrap:wrap; gap:14px; margin-top:9px; font-family:var(--mono); font-size:.72rem; color:var(--muted)}
+.legend i{display:inline-block; width:10px; height:10px; margin-right:5px; vertical-align:-1px}
+
+.readout{display:grid; grid-template-columns:repeat(auto-fit,minmax(108px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); margin-top:16px}
+.ro{background:var(--surface); padding:10px 12px}
+.ro .k{font-family:var(--mono); font-size:.68rem; letter-spacing:.07em; text-transform:uppercase; color:var(--muted)}
+.ro .v{font-family:var(--mono); font-size:1.12rem; font-weight:500; margin-top:2px; font-variant-numeric:tabular-nums}
+
+.slots{margin-top:18px; display:flex; flex-direction:column; gap:7px}
+.slot{
+  display:grid; grid-template-columns:1fr auto auto; gap:10px; align-items:center;
+  border:1px solid var(--line); background:var(--surface-2); padding:8px 10px;
+}
+.slot .id{font-family:var(--mono); font-size:.76rem; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.slot .held{font-family:var(--mono); font-size:.8rem; color:var(--held); font-weight:500; white-space:nowrap}
+.lease{grid-column:1/-1; height:3px; background:var(--line); overflow:hidden}
+.lease i{display:block; height:100%; background:var(--held); transition:width .25s linear}
+.lease.expiring i{background:var(--shed)}
+.slot .acts{display:flex; gap:5px}
+.empty{color:var(--muted); font-family:var(--mono); font-size:.8rem; padding:14px 0; text-align:center}
+
+button{
+  font-family:var(--sans); font-size:.86rem; font-weight:500; cursor:pointer;
+  border:1px solid var(--line-2); background:var(--surface); color:var(--ink);
+  padding:7px 12px; transition:background .12s, border-color .12s;
+}
+button:hover{background:var(--surface-2); border-color:var(--ink-2)}
+button:focus-visible{outline:2px solid var(--held); outline-offset:2px}
+button.primary{background:var(--ink); color:var(--ground); border-color:var(--ink)}
+button.primary:hover{background:var(--ink-2); border-color:var(--ink-2)}
+button.tiny{font-size:.74rem; padding:4px 8px; font-family:var(--mono)}
+button.on{background:var(--held); border-color:var(--held); color:#fff}
+button:disabled{opacity:.42; cursor:not-allowed}
+.btnrow{display:flex; flex-wrap:wrap; gap:8px; margin-top:16px}
+
+.ctrl{display:flex; flex-direction:column; gap:4px; margin-bottom:13px}
+.ctrl label{font-family:var(--mono); font-size:.72rem; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); display:flex; justify-content:space-between; gap:8px}
+.ctrl label b{color:var(--ink); font-weight:500; text-transform:none; letter-spacing:0}
+input[type=range]{width:100%; accent-color:var(--held); margin:0}
+.seg{display:flex; border:1px solid var(--line-2)}
+.seg button{flex:1; border:0; border-radius:0; font-family:var(--mono); font-size:.76rem; padding:6px 4px}
+.seg button + button{border-left:1px solid var(--line-2)}
+.seg button[aria-pressed=true]{background:var(--ink); color:var(--ground)}
+
+.log{
+  margin-top:0; max-height:270px; overflow-y:auto; font-family:var(--mono); font-size:.76rem;
+  line-height:1.5; border-top:1px solid var(--line);
+}
+.log .row{display:grid; grid-template-columns:52px 74px 1fr; gap:9px; padding:5px 16px; border-bottom:1px solid var(--line)}
+.log .row:nth-child(odd){background:var(--surface-2)}
+.log .tm{color:var(--muted); font-variant-numeric:tabular-nums}
+.log .tag{font-weight:600; letter-spacing:.02em}
+.log .msg{color:var(--ink-2); overflow-wrap:anywhere}
+.t-admit{color:var(--admit)} .t-shed{color:var(--shed)}
+.t-commit{color:var(--ink-2)} .t-reclaim{color:var(--reclaim)}
+
+.note{
+  margin-top:20px; border:1px dashed var(--line-2); background:var(--surface);
+  padding:14px 16px; font-size:.88rem; color:var(--ink-2);
+}
+.note b{color:var(--ink); font-weight:600}
+
+/* ---------- tables ---------- */
+.tablewrap{overflow-x:auto; border:1px solid var(--line); background:var(--surface)}
+table{border-collapse:collapse; width:100%; font-size:.86rem; min-width:560px}
+th,td{padding:8px 12px; text-align:right; border-bottom:1px solid var(--line); white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+thead th{
+  font-family:var(--mono); font-size:.7rem; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--muted); font-weight:500; background:var(--surface-2); position:sticky; top:0;
+}
+tbody td{font-family:var(--mono); font-variant-numeric:tabular-nums}
+tbody tr:last-child td{border-bottom:0}
+td.bad{color:var(--shed); font-weight:600}
+td.good{color:var(--admit); font-weight:600}
+.caption{font-size:.83rem; color:var(--muted); margin-top:9px}
+.caption code{color:var(--ink-2)}
+
+.cols2{display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:22px}
+.deck{background:var(--surface); border:1px solid var(--line); padding:18px}
+.deck h3{margin-bottom:8px}
+.deck p{font-size:.92rem; color:var(--ink-2)}
+.deck + .deck{margin-top:0}
+
+ul.tight{margin:10px 0 0; padding-left:20px}
+ul.tight li{margin-bottom:7px; font-size:.93rem; color:var(--ink-2)}
+ul.tight li b{color:var(--ink); font-weight:600}
+
+footer{padding-block:34px 44px; font-size:.86rem; color:var(--muted)}
+footer a{color:var(--ink-2)}
+.footlinks{display:flex; flex-wrap:wrap; gap:18px; margin-top:12px; font-family:var(--mono); font-size:.8rem}
+
+@media (max-width:860px){
+  .sim{grid-template-columns:1fr}
+  .phases{grid-template-columns:1fr}
+}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none !important; animation:none !important}
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap topbar">
+    <div class="brand">LLM Admission <span>Gateway</span></div>
+    <nav class="toplinks">
+      <a href="#simulator">Simulator</a>
+      <a href="#measured">Measured</a>
+      <a href="#design">Design</a>
+      <a href="https://github.com/GeoffreyWang1117/Rate-Limiter-Service">Source</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="hero prose">
+    <div class="eyebrow">Admission control · Redis · Lua · TypeScript</div>
+    <h1>Rate limiting stops working when a request&rsquo;s cost is unknown.</h1>
+    <p class="lede">
+      A conventional limiter charges one unit per request and decides once, on arrival.
+      For LLM inference neither half holds: cost is tokens, varying by three orders of
+      magnitude between a one-line completion and a 200k-token context &mdash; and the
+      larger half of that cost, the output, is not known until generation stops.
+    </p>
+    <div class="thesis">
+      So admission cannot be one decision. It is a protocol:
+      <strong>hold budget against an unknown, reconcile when it becomes known, and
+      reclaim when the holder never comes back.</strong>
+      The third part is what makes it a distributed systems problem rather than bookkeeping.
+    </div>
+  </div>
+
+  <section id="protocol">
+    <div class="sechead">
+      <div class="eyebrow">The protocol</div>
+      <h2>Three phases, one atomic script each</h2>
+    </div>
+    <div class="prose">
+      <p class="muted" style="font-size:.95rem">
+        Refill, compare, deduct and lease happen inside a single Lua script, so N gateway
+        replicas cannot over-admit by a factor of N. Redis runs a script to completion,
+        which serialises the whole decision on the shard without any lock the gateway has
+        to hold, renew, or lose.
+      </p>
+    </div>
+    <div class="phases">
+      <div class="phase p1">
+        <div class="n">01 — RESERVE</div>
+        <h3>Hold the unknown</h3>
+        <p>Deduct an estimate, write a lease with a deadline, return a reservation id.
+           Under <code>worst_case</code> the estimate is the declared ceiling; under
+           <code>adaptive</code> it is an EWMA of what this model has actually been producing.</p>
+      </div>
+      <div class="phase p2">
+        <div class="n">02 — COMMIT</div>
+        <h3>Reconcile</h3>
+        <p>Generation finished, so the real cost is known. Refund the difference, or charge
+           the overrun. Idempotent, because this call happens right after a slow generation
+           &mdash; exactly when clients time out and retry.</p>
+      </div>
+      <div class="phase p3">
+        <div class="n">03 — EXPIRE</div>
+        <h3>Reclaim</h3>
+        <p>A client that dies between the two calls would otherwise burn its tenant&rsquo;s
+           budget forever, with every individual decision still correct and nothing to alert
+           on. Expired leases are swept in bounded batches, on the admission path.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="simulator">
+    <div class="sechead">
+      <div class="eyebrow">Live instrument</div>
+      <h2>Drive the protocol</h2>
+      <p class="prose muted" style="font-size:.95rem">
+        Send requests and watch the budget split into free, held and spent. Complete one to
+        see the hold reconciled. <b style="color:var(--shed)">Abandon</b> one to simulate a
+        client crash &mdash; the budget stays held until the lease expires, and the next
+        admission reclaims it.
+      </p>
+    </div>
+
+    <div class="sim">
+      <div class="panel">
+        <div class="panel-hd">
+          <div class="t">tenant <span class="mono">acme</span> · model <span class="mono">llama-70b</span></div>
+          <div class="mono muted" style="font-size:.76rem" id="clock">t+0.0s</div>
+        </div>
+        <div class="panel-bd">
+          <div class="budget-label">
+            <span>Balance &mdash; what the next request is judged against</span>
+            <span><b id="tokRemain">0</b> / <span id="tokCap">0</span></span>
+          </div>
+          <div class="bar" role="img" aria-label="Token balance against capacity">
+            <div class="seg-free" id="segFree" style="width:100%"></div>
+            <div class="seg-debt" id="segDebt" style="width:0"></div>
+          </div>
+
+          <div class="budget-label" style="margin-top:12px">
+            <span>Held by in-flight reservations &mdash; returned at commit</span>
+            <span><b id="tokHeld">0</b></span>
+          </div>
+          <div class="bar thin" role="img" aria-label="Tokens held by in-flight reservations">
+            <div class="seg-held" id="segHeld" style="width:0"></div>
+          </div>
+          <div class="legend">
+            <span><i class="seg-free"></i>balance</span>
+            <span><i class="seg-held"></i>held</span>
+            <span><i class="seg-debt"></i>overrun debt</span>
+            <span class="muted">both bars share the same capacity axis; they are not additive &mdash; a hold was deducted once, and the bucket refills independently of it</span>
+          </div>
+
+          <div class="readout">
+            <div class="ro"><div class="k">inflight</div><div class="v" id="roInflight">0</div></div>
+            <div class="ro"><div class="k">slots</div><div class="v" id="roSlots">0/0</div></div>
+            <div class="ro"><div class="k">queue</div><div class="v" id="roQueue">0/0</div></div>
+            <div class="ro"><div class="k">pred. wait</div><div class="v" id="roWait">0ms</div></div>
+            <div class="ro"><div class="k">ewma out</div><div class="v" id="roEwma">—</div></div>
+            <div class="ro"><div class="k">reclaimed</div><div class="v" id="roReclaim">0</div></div>
+          </div>
+
+          <div class="slots" id="slots"></div>
+
+          <div class="btnrow">
+            <button class="primary" id="btnSend">Send request</button>
+            <button id="btnBurst">Burst &times;8</button>
+            <button id="btnAuto">Auto traffic: off</button>
+            <button id="btnReset">Reset</button>
+          </div>
+        </div>
+        <div class="log" id="log" aria-live="polite" aria-label="Decision log"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-hd"><div class="t">Policy</div></div>
+        <div class="panel-bd">
+          <div class="ctrl">
+            <label for="cMode">reservation mode</label>
+            <div class="seg" id="cMode" role="group" aria-label="Reservation mode">
+              <button data-mode="worst_case" aria-pressed="true">worst_case</button>
+              <button data-mode="adaptive" aria-pressed="false">adaptive</button>
+            </div>
+          </div>
+          <div class="ctrl" id="ctrlSafety" hidden>
+            <label for="cSafety">safety factor <b id="vSafety">1.5&times;</b></label>
+            <input type="range" id="cSafety" min="1" max="4" step="0.1" value="1.5">
+          </div>
+          <div class="ctrl">
+            <label for="cTpm">tokens / minute <b id="vTpm">20,000</b></label>
+            <input type="range" id="cTpm" min="4000" max="80000" step="2000" value="20000">
+          </div>
+          <div class="ctrl">
+            <label for="cConc">max concurrency <b id="vConc">4</b></label>
+            <input type="range" id="cConc" min="1" max="12" step="1" value="4">
+          </div>
+          <div class="ctrl">
+            <label for="cQueue">max queue depth <b id="vQueue">4</b></label>
+            <input type="range" id="cQueue" min="0" max="16" step="1" value="4">
+          </div>
+          <div class="ctrl">
+            <label for="cLease">lease seconds <b id="vLease">8</b></label>
+            <input type="range" id="cLease" min="3" max="30" step="1" value="8">
+          </div>
+          <div class="ctrl">
+            <label for="cMaxOut">declared max_tokens <b id="vMaxOut">2,048</b></label>
+            <input type="range" id="cMaxOut" min="256" max="4096" step="256" value="2048">
+          </div>
+          <div class="ctrl" style="margin-bottom:0">
+            <label for="cSlo">SLO TTFT <b id="vSlo">off</b></label>
+            <input type="range" id="cSlo" min="0" max="8000" step="500" value="0">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="note">
+      <b>What this is.</b> A faithful browser reimplementation of the admission logic in
+      <code>src/llm/admission-scripts.ts</code> &mdash; the same constraint ordering,
+      fractional token-bucket refill, bounded inline lease sweep, idempotent settlement and
+      EWMA estimator. It is <b>not</b> the service: there is no Redis, no PostgreSQL and no
+      network here, so nothing on this page is a latency measurement. Real numbers are
+      <a href="#measured">below</a>, and they come from committed artifacts.
+      Two deliberate differences: the lease default is 8&nbsp;s rather than 120&nbsp;s and
+      the budget is scaled down, both so that expiry and refill are observable at human
+      speed; and this simulator applies refill on commit, which the production Lua currently
+      does not &mdash; a defect recorded in
+      <a href="https://github.com/GeoffreyWang1117/Rate-Limiter-Service/blob/HEAD/PROJECT_ENGINEERING_GUIDE.md">the engineering guide</a>, §17.1.
+    </div>
+  </section>
+
+  <section id="measured">
+    <div class="sechead">
+      <div class="eyebrow">Measured, not projected</div>
+      <h2>What one replica actually does</h2>
+      <p class="prose muted" style="font-size:.95rem">
+        Open-loop load against absolute arrival deadlines, full reserve + commit cycle per
+        request, budgets set far above the offered rate so this measures the cost of
+        deciding rather than the cost of refusing. Raw output for every row is committed
+        under <code>bench/results/</code>.
+      </p>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>offered cycles/s</th><th>achieved</th><th>p50 ms</th><th>p95 ms</th>
+            <th>p99 ms</th><th>p99 range</th><th>spread</th><th>gateway CPU</th><th>Redis CPU</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>250</td><td>250</td><td>0.43</td><td>0.55</td><td>0.70</td><td>0.65–0.71</td><td class="good">1.1&times;</td><td>10%</td><td>0%</td></tr>
+          <tr><td>500</td><td>500</td><td>0.41</td><td>0.52</td><td>0.61</td><td>0.59–0.63</td><td class="good">1.1&times;</td><td>20%</td><td>0%</td></tr>
+          <tr><td>1000</td><td>1000</td><td>0.44</td><td>0.59</td><td>0.73</td><td>0.71–0.89</td><td class="good">1.3&times;</td><td>30%</td><td>10%</td></tr>
+          <tr><td>1500</td><td>1500</td><td>0.47</td><td>0.70</td><td>1.09</td><td>0.91–2.51</td><td>2.8&times;</td><td>50%</td><td>10%</td></tr>
+          <tr><td>2000</td><td>2000</td><td>0.63</td><td>0.91</td><td>1.48</td><td>1.44–6.05</td><td>4.2&times;</td><td>60%</td><td>20%</td></tr>
+          <tr><td>2500</td><td>2499</td><td>0.72</td><td>1.30</td><td>6.91</td><td>2.87–29.01</td><td class="bad">10.1&times;</td><td>70%</td><td>20%</td></tr>
+          <tr><td>3000</td><td>2999</td><td>0.72</td><td>2.08</td><td>9.55</td><td>3.23–17.99</td><td class="bad">5.6&times;</td><td>80%</td><td>30%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="caption">
+      Median of <b>five</b> sweeps, with the range and the max/min spread beside it. 32 cores,
+      Node 26.7.0, Redis 8.10.1 and PostgreSQL 18.6 over loopback; host load average 4.0–5.8,
+      recorded in <code>bench/results/repeat/load.txt</code>. Reproduce with
+      <code>./bench/repeat.sh 5 20</code>.
+    </p>
+
+    <div class="note" style="border-style:solid; border-left:3px solid var(--held)">
+      <b>The capacity claim is 1,000 cycles/s, not 3,000.</b> The service serves 2,999 of
+      3,000 offered, and quoting that would look better. But the spread column says the tail
+      above ~2,000 moves more between two runs of the same binary than it does between 250
+      and 2,000 cycles/s &mdash; at that point the number describes a shared machine, not
+      this service. The honest operating point is the highest rate where the tail still
+      repeats: p99 under 1&nbsp;ms to 1,000 cycles/s, within 1.3&times; across five sweeps.
+    </div>
+
+    <div class="sechead" style="margin-top:44px">
+      <h2>Holding the ceiling strands most of a budget</h2>
+    </div>
+    <div class="cols2">
+      <div>
+        <div class="tablewrap">
+          <table style="min-width:auto">
+            <thead><tr><th>mode</th><th>admitted</th><th>mean held</th><th>mean used</th><th>unused</th></tr></thead>
+            <tbody>
+              <tr><td>worst_case</td><td>75</td><td>5341</td><td>1471</td><td class="bad">72.5%</td></tr>
+              <tr><td>adaptive</td><td class="good">230</td><td>1739</td><td>1516</td><td>12.9%</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="caption">
+          400 requests arriving together against 400,000 tokens/minute. Adaptive admits
+          <b>3.07&times;</b> as much of the burst, and overruns on 12.6% of them &mdash;
+          worth 1.83% of tokens used, charged at commit rather than escaping the budget.
+        </p>
+      </div>
+      <div>
+        <div class="tablewrap">
+          <table style="min-width:auto">
+            <thead><tr><th>assumed output median</th><th>unused</th><th>worst</th><th>adaptive</th><th>advantage</th></tr></thead>
+            <tbody>
+              <tr><td>90</td><td>74.3%</td><td>75</td><td>267</td><td class="good">3.56&times;</td></tr>
+              <tr><td>180</td><td>72.0%</td><td>75</td><td>230</td><td class="good">3.07&times;</td></tr>
+              <tr><td>400</td><td>66.2%</td><td>75</td><td>174</td><td>2.32&times;</td></tr>
+              <tr><td>900</td><td>54.0%</td><td>75</td><td>112</td><td>1.49&times;</td></tr>
+              <tr><td>2000</td><td>35.0%</td><td>75</td><td>74</td><td class="bad">0.99&times;</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="caption">
+          The 72% is an <b>input</b>, not a finding &mdash; arithmetic on a log-normal chosen
+          to resemble chat traffic, against a fixed 4096 ceiling. No production trace was
+          available, so the result is reported as a sweep over the assumption it rests on.
+          The last row is the honest reading: once callers declare close to what they use,
+          adaptive buys nothing and its overrun risk is not worth carrying.
+        </p>
+      </div>
+    </div>
+    <p class="caption" style="margin-top:14px">
+      <code>worst_case</code> admitting exactly 75 at every median is the self-consistency
+      check: that mode reserves the declared ceiling and ignores what is generated, so its
+      count cannot depend on the output distribution. An earlier version of this benchmark
+      showed it varying from 42 down to 0 &mdash; which is how the calibration phase was
+      found to be draining the budget before the measured burst began.
+    </p>
+  </section>
+
+  <section id="design">
+    <div class="sechead">
+      <div class="eyebrow">Decisions</div>
+      <h2>Why it is built this way</h2>
+    </div>
+    <div class="cols2">
+      <div class="deck">
+        <h3>Expiry is swept inline, not by a background job</h3>
+        <p>A sweeper is the obvious design and the wrong one: another process to deploy,
+        monitor and elect a leader for, returning budget on its own schedule instead of when
+        someone needs it &mdash; and it introduces the one race the protocol most needs to
+        avoid, refunding a hold at the moment its owner commits it. A bounded sweep at the
+        top of the admit script has none of those properties and needs no coordination.</p>
+      </div>
+      <div class="deck">
+        <h3>The balance may go negative</h3>
+        <p>An overrun is charged as a negative refund and the tenant refills out of the hole.
+        Clamping at zero would make tokens beyond the reservation free, turning
+        underestimation into a strategy and making adaptive mode exploitable by design
+        rather than merely imprecise.</p>
+      </div>
+      <div class="deck">
+        <h3>Commit is idempotent; reserve is not</h3>
+        <p>Commit is called by a client that just waited out a slow generation, which is
+        exactly when its request times out and gets retried. A retried <em>reserve</em>, by
+        contrast, is a genuinely new request for capacity &mdash; the first is released by
+        its lease, and deduplicating it would need an idempotency key the caller has no
+        reason to have.</p>
+      </div>
+      <div class="deck">
+        <h3>The two failure modes differ</h3>
+        <p>The generic limiter fails open; LLM admission fails closed. A limiter that returns
+        500 on a Redis blip has made its own availability the ceiling on everything it
+        fronts. But unmetered traffic into a fixed accelerator pool does not degrade
+        gracefully &mdash; it queues until the backend collapses and every in-flight request
+        is lost, not just the excess.</p>
+      </div>
+    </div>
+
+    <div class="sechead" style="margin-top:38px"><h2>Known limits</h2></div>
+    <ul class="tight prose">
+      <li><b>One process, one core.</b> Capacity comes from replicas; the gateway is stateless and every decision is one atomic script.</li>
+      <li><b>No production trace.</b> Output lengths are drawn from an assumed distribution, which is why the reservation result is a sweep rather than a number.</li>
+      <li><b>No LLM is behind the gateway in any benchmark.</b> Admission decides before generation starts; the measurements cover the decision and the accounting, not end-to-end serving.</li>
+      <li><b>Redis Cluster has never been deployed.</b> Keys carry hash tags so multi-key scripts stay in one slot, but that is a claim about key layout, not a tested deployment.</li>
+      <li><b>Three defects are open and documented</b>, including a missing refill on the commit path. They are recorded rather than quietly fixed, with reproductions.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <p>
+      TypeScript · Express · Redis + Lua · PostgreSQL · Prometheus.
+      103 tests against a real Redis and a real PostgreSQL, never mocks &mdash; every property
+      worth checking here lives inside those servers.
+    </p>
+    <div class="footlinks">
+      <a href="https://github.com/GeoffreyWang1117/Rate-Limiter-Service">Source</a>
+      <a href="https://github.com/GeoffreyWang1117/Rate-Limiter-Service/blob/HEAD/PROJECT_ENGINEERING_GUIDE.md">Engineering guide</a>
+      <a href="https://github.com/GeoffreyWang1117/Rate-Limiter-Service/blob/HEAD/docs/DESIGN.md">Design notes</a>
+      <a href="https://github.com/GeoffreyWang1117/Rate-Limiter-Service/blob/HEAD/SECURITY.md">Security audit</a>
+      <a href="https://github.com/GeoffreyWang1117/Rate-Limiter-Service/tree/HEAD/bench/results">Raw results</a>
+    </div>
+  </footer>
+</div>
+
+<script>
+"use strict";
+/* ------------------------------------------------------------------
+   Browser reimplementation of src/llm/admission-scripts.ts.
+   Same constraint ordering, fractional refill, bounded inline sweep,
+   idempotent settlement, EWMA estimator. No network, no Redis.
+------------------------------------------------------------------ */
+
+var RECLAIM_BATCH = 32;
+var EWMA_ALPHA = 0.2;
+var COLD_START_SERVICE_MS = 2000;
+
+var policy = {
+  tokensPerMinute: 20000,
+  requestsPerMinute: 600,
+  maxConcurrency: 4,
+  maxQueueDepth: 4,
+  leaseSeconds: 8,
+  reservationMode: "worst_case",
+  reservationSafetyFactor: 1.5
+};
+var declaredMaxOut = 2048;
+var sloTtftMs = 0;
+
+var S, t0, autoTimer = null, seq = 0, totalReclaimed = 0;
+
+function now(){ return performance.now() - t0; }
+
+function freshState(){
+  return {
+    tpm: policy.tokensPerMinute, tpmTs: 0,
+    rpm: policy.requestsPerMinute, rpmTs: 0,
+    leases: new Map(),          // id -> expiry ms
+    res: new Map(),             // id -> tokens held
+    settled: new Map(),         // id -> refund
+    stats: { svcMs: null, outTokens: null },
+    spent: 0
+  };
+}
+
+/* seeded log-normal, so a reload behaves the same way */
+var _seed = 20260830;
+function rnd(){ _seed = (_seed * 1664525 + 1013904223) >>> 0; return _seed / 4294967296; }
+function logNormal(median, sigma){
+  var u1 = Math.max(rnd(), 1e-9), u2 = rnd();
+  var z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  return Math.max(1, Math.round(median * Math.exp(sigma * z)));
+}
+
+function refill(bal, ts, capacity, ratePerSec, t){
+  return Math.min(bal + Math.max(0, t - ts) / 1000 * ratePerSec, capacity);
+}
+
+function estimate(promptTokens, maxOutputTokens){
+  var worst = promptTokens + maxOutputTokens;
+  if (policy.reservationMode === "worst_case") return { reserve: worst, worst: worst, basis: "worst_case" };
+  var ewma = S.stats.outTokens;
+  if (!ewma || ewma <= 0) return { reserve: worst, worst: worst, basis: "cold_start" };
+  var projected = Math.ceil(ewma * policy.reservationSafetyFactor);
+  var out = Math.min(maxOutputTokens, Math.max(projected, 1));
+  return { reserve: promptTokens + out, worst: worst, basis: "observed" };
+}
+
+/* ---- ADMIT_SCRIPT ---- */
+function admit(promptTokens, maxOutputTokens){
+  var t = now();
+  var tpmRate = policy.tokensPerMinute / 60, rpmRate = policy.requestsPerMinute / 60;
+
+  // phase 1: bounded sweep of expired leases
+  var reclaimedTokens = 0, reclaimedCount = 0;
+  var expired = [];
+  S.leases.forEach(function(exp, id){ if (exp <= t && expired.length < RECLAIM_BATCH) expired.push(id); });
+  expired.forEach(function(id){
+    var held = S.res.get(id);
+    if (held !== undefined){ reclaimedTokens += held; S.res.delete(id); }
+    S.leases.delete(id);
+    reclaimedCount++;
+  });
+
+  // phase 2: fractional refill; the clock advances whatever the decision is
+  var tpmBal = Math.min(refill(S.tpm, S.tpmTs, policy.tokensPerMinute, tpmRate, t) + reclaimedTokens, policy.tokensPerMinute);
+  var rpmBal = refill(S.rpm, S.rpmTs, policy.requestsPerMinute, rpmRate, t);
+
+  var inflight = S.leases.size;
+  var avgSvc = S.stats.svcMs === null ? COLD_START_SERVICE_MS : S.stats.svcMs;
+  var predictedWait = inflight >= policy.maxConcurrency
+    ? Math.ceil(((inflight + 1 - policy.maxConcurrency) / policy.maxConcurrency) * avgSvc) : 0;
+
+  var est = estimate(promptTokens, maxOutputTokens);
+  var admitted = 0, reason = "", retryAfterMs = 0, id = null;
+
+  if (est.reserve > policy.tokensPerMinute){
+    reason = "unsatisfiable";                       // retrying can never work → no Retry-After
+  } else if (rpmBal < 1){
+    reason = "rpm_exhausted";  retryAfterMs = Math.ceil((1 - rpmBal) / rpmRate * 1000);
+  } else if (tpmBal < est.reserve){
+    reason = "tpm_exhausted";  retryAfterMs = Math.ceil((est.reserve - tpmBal) / tpmRate * 1000);
+  } else if (inflight >= policy.maxConcurrency + policy.maxQueueDepth){
+    reason = "queue_full";     retryAfterMs = Math.ceil(avgSvc);
+  } else if (sloTtftMs > 0 && predictedWait > sloTtftMs){
+    reason = "slo_infeasible"; retryAfterMs = Math.ceil(avgSvc);
+  } else {
+    admitted = 1;
+    tpmBal -= est.reserve;
+    rpmBal -= 1;
+    id = "r" + (++seq).toString(36).padStart(3, "0");
+    S.leases.set(id, t + policy.leaseSeconds * 1000);
+    S.res.set(id, est.reserve);
+    inflight += 1;
+  }
+
+  // balances persist on both paths: refill and reclaim are real state changes
+  S.tpm = tpmBal; S.tpmTs = t; S.rpm = rpmBal; S.rpmTs = t;
+
+  if (reclaimedCount > 0){
+    totalReclaimed += reclaimedCount;
+    log("reclaim", "swept " + reclaimedCount + " expired lease" + (reclaimedCount > 1 ? "s" : "") +
+        ", " + fmt(reclaimedTokens) + " tokens returned");
+  }
+  return { admitted: admitted, reason: reason, id: id, reserve: est.reserve, basis: est.basis,
+           predictedWait: predictedWait, retryAfterMs: retryAfterMs };
+}
+
+/* ---- COMMIT_SCRIPT ---- */
+function commit(id, promptTokens, outputTokens, serviceMs){
+  var t = now();
+  if (S.settled.has(id)) return { status: "duplicate_ignored", refund: S.settled.get(id) };
+
+  var held = S.res.get(id), status = "committed";
+  if (held === undefined){ held = 0; status = "reconciled_after_expiry"; }
+  else { S.res.delete(id); S.leases.delete(id); }
+
+  // The production Lua does NOT refill here — see engineering guide §17.1.
+  // This simulator applies it, so the instrument shows the intended protocol.
+  var bal = refill(S.tpm, S.tpmTs, policy.tokensPerMinute, policy.tokensPerMinute / 60, t);
+  var actual = promptTokens + outputTokens;
+  var refund = held - actual;
+  bal = Math.min(bal + refund, policy.tokensPerMinute);
+
+  S.tpm = bal; S.tpmTs = t;
+  S.settled.set(id, refund);
+  S.spent += actual;
+
+  if (serviceMs > 0) S.stats.svcMs = S.stats.svcMs === null ? serviceMs : EWMA_ALPHA * serviceMs + (1 - EWMA_ALPHA) * S.stats.svcMs;
+  if (outputTokens > 0) S.stats.outTokens = S.stats.outTokens === null ? outputTokens : EWMA_ALPHA * outputTokens + (1 - EWMA_ALPHA) * S.stats.outTokens;
+
+  return { status: status, refund: refund };
+}
+
+/* ------------------------------ UI ------------------------------ */
+var $ = function(id){ return document.getElementById(id); };
+var pending = new Map();   // id -> {promptTokens, actualOutput, serviceMs}
+
+function fmt(n){ return Math.round(n).toLocaleString("en-US"); }
+
+function log(kind, msg){
+  var row = document.createElement("div");
+  row.className = "row";
+  var tag = { admit:"ADMIT", shed:"SHED", commit:"COMMIT", reclaim:"RECLAIM" }[kind] || kind.toUpperCase();
+  row.innerHTML = '<span class="tm">' + (now()/1000).toFixed(1) + 's</span>' +
+                  '<span class="tag t-' + kind + '">' + tag + '</span>' +
+                  '<span class="msg"></span>';
+  row.querySelector(".msg").textContent = msg;
+  var el = $("log");
+  el.insertBefore(row, el.firstChild);
+  while (el.children.length > 60) el.removeChild(el.lastChild);
+}
+
+function sendOne(){
+  var promptTokens = logNormal(900, 0.7);
+  var maxOut = declaredMaxOut;
+  var r = admit(promptTokens, maxOut);
+
+  if (r.admitted){
+    var actualOutput = Math.min(logNormal(180, 0.9), maxOut);
+    pending.set(r.id, {
+      promptTokens: promptTokens,
+      actualOutput: actualOutput,
+      serviceMs: 120 + actualOutput * 8
+    });
+    log("admit", r.id + " held " + fmt(r.reserve) + " tokens (" + r.basis +
+        ", prompt " + fmt(promptTokens) + " + declared " + fmt(maxOut) + ")" +
+        (r.predictedWait > 0 ? ", predicted wait " + r.predictedWait + "ms" : ""));
+  } else {
+    var extra = r.reason === "unsatisfiable"
+      ? " — larger than the whole budget, no Retry-After"
+      : " — retry after " + (r.retryAfterMs / 1000).toFixed(1) + "s";
+    log("shed", r.reason + extra);
+  }
+  render();
+}
+
+function completeOne(id){
+  var p = pending.get(id); if (!p) return;
+  var c = commit(id, p.promptTokens, p.actualOutput, p.serviceMs);
+  pending.delete(id);
+  var used = p.promptTokens + p.actualOutput;
+  log("commit", id + " used " + fmt(used) + " (" + fmt(p.actualOutput) + " generated), " +
+      (c.refund >= 0 ? "refunded " + fmt(c.refund) : "OVERRAN by " + fmt(-c.refund)) +
+      " · " + c.status);
+  render();
+}
+
+function abandonOne(id){
+  pending.delete(id);              // client is gone; the lease is left to expire
+  var exp = S.leases.get(id);
+  log("shed", id + " client abandoned — hold stays until the lease expires in " +
+      (exp === undefined ? "?" : ((exp - now()) / 1000).toFixed(1)) + "s, then the next admission reclaims it");
+  render();
+}
+
+function render(){
+  var t = now();
+  var cap = policy.tokensPerMinute;
+  var free = refill(S.tpm, S.tpmTs, cap, cap / 60, t);
+  var held = 0; S.res.forEach(function(v){ held += v; });
+
+  // Balance and held are measured on the same capacity axis but are NOT additive:
+  // a hold was deducted from the balance once, at reserve, and the bucket refills
+  // independently of it. Drawing them as segments of one bar double-counted, and
+  // showed a full balance beside outstanding holds as if the two summed past cap.
+  var debt = free < 0 ? -free : 0;
+  var freeShown = Math.max(0, free);
+  $("segFree").style.width = (Math.min(freeShown, cap) / cap * 100) + "%";
+  $("segDebt").style.width = (Math.min(debt, cap) / cap * 100) + "%";
+  $("segHeld").style.width = (Math.min(held, cap) / cap * 100) + "%";
+
+  $("tokRemain").textContent = fmt(free);
+  $("tokHeld").textContent = fmt(held);
+  $("tokCap").textContent = fmt(cap);
+  $("clock").textContent = "t+" + (t / 1000).toFixed(1) + "s";
+
+  var inflight = S.leases.size;
+  $("roInflight").textContent = inflight;
+  $("roSlots").textContent = Math.min(inflight, policy.maxConcurrency) + "/" + policy.maxConcurrency;
+  $("roQueue").textContent = Math.max(0, inflight - policy.maxConcurrency) + "/" + policy.maxQueueDepth;
+  var avgSvc = S.stats.svcMs === null ? COLD_START_SERVICE_MS : S.stats.svcMs;
+  $("roWait").textContent = (inflight >= policy.maxConcurrency
+    ? Math.ceil(((inflight + 1 - policy.maxConcurrency) / policy.maxConcurrency) * avgSvc) : 0) + "ms";
+  $("roEwma").textContent = S.stats.outTokens === null ? "—" : fmt(S.stats.outTokens);
+  $("roReclaim").textContent = totalReclaimed;
+
+  var box = $("slots");
+  if (S.leases.size === 0){
+    box.innerHTML = '<div class="empty">no reservations in flight</div>';
+    return;
+  }
+  var html = "";
+  S.leases.forEach(function(exp, id){
+    var remain = Math.max(0, exp - t);
+    var pct = Math.max(0, Math.min(100, remain / (policy.leaseSeconds * 1000) * 100));
+    var live = pending.has(id);
+    html += '<div class="slot">' +
+      '<span class="id">' + id + (live ? "" : " · abandoned") + '</span>' +
+      '<span class="held">' + fmt(S.res.get(id) || 0) + ' held</span>' +
+      '<span class="acts">' +
+        (live ? '<button class="tiny" data-done="' + id + '">complete</button>' +
+                '<button class="tiny" data-kill="' + id + '">abandon</button>'
+              : '<span class="mono muted" style="font-size:.72rem">awaiting expiry</span>') +
+      '</span>' +
+      '<span class="lease' + (pct < 30 ? " expiring" : "") + '"><i style="width:' + pct + '%"></i></span>' +
+    '</div>';
+  });
+  box.innerHTML = html;
+}
+
+/* ---- wiring ---- */
+function reset(){
+  t0 = performance.now();
+  S = freshState();
+  pending.clear(); seq = 0; totalReclaimed = 0;
+  $("log").innerHTML = "";
+  // Open in a working state rather than an empty shell.
+  sendOne(); sendOne();
+  render();
+}
+
+$("slots").addEventListener("click", function(e){
+  var d = e.target.getAttribute && e.target.getAttribute("data-done");
+  var k = e.target.getAttribute && e.target.getAttribute("data-kill");
+  if (d) completeOne(d);
+  if (k) abandonOne(k);
+});
+
+$("btnSend").addEventListener("click", sendOne);
+$("btnBurst").addEventListener("click", function(){ for (var i = 0; i < 8; i++) sendOne(); });
+$("btnReset").addEventListener("click", reset);
+
+$("btnAuto").addEventListener("click", function(){
+  if (autoTimer){
+    clearInterval(autoTimer); autoTimer = null;
+    this.textContent = "Auto traffic: off"; this.classList.remove("on");
+  } else {
+    autoTimer = setInterval(function(){
+      sendOne();
+      // finish roughly one in-flight request per tick, oldest first
+      var first = null;
+      pending.forEach(function(_, id){ if (first === null) first = id; });
+      if (first !== null && Math.random() < 0.75) completeOne(first);
+    }, 900);
+    this.textContent = "Auto traffic: on"; this.classList.add("on");
+  }
+});
+
+document.querySelectorAll("#cMode button").forEach(function(b){
+  b.addEventListener("click", function(){
+    policy.reservationMode = b.getAttribute("data-mode");
+    document.querySelectorAll("#cMode button").forEach(function(x){
+      x.setAttribute("aria-pressed", String(x === b));
+    });
+    $("ctrlSafety").hidden = policy.reservationMode !== "adaptive";
+    log("commit", "reservation mode → " + policy.reservationMode);
+    render();
+  });
+});
+
+function bindRange(id, valId, apply, format){
+  var el = $(id);
+  el.addEventListener("input", function(){
+    var v = parseFloat(el.value);
+    apply(v);
+    $(valId).textContent = format(v);
+    render();
+  });
+}
+bindRange("cTpm","vTpm",function(v){ policy.tokensPerMinute = v; }, function(v){ return fmt(v); });
+bindRange("cConc","vConc",function(v){ policy.maxConcurrency = v; }, String);
+bindRange("cQueue","vQueue",function(v){ policy.maxQueueDepth = v; }, String);
+bindRange("cLease","vLease",function(v){ policy.leaseSeconds = v; }, String);
+bindRange("cMaxOut","vMaxOut",function(v){ declaredMaxOut = v; }, function(v){ return fmt(v); });
+bindRange("cSafety","vSafety",function(v){ policy.reservationSafetyFactor = v; }, function(v){ return v.toFixed(1) + "×"; });
+bindRange("cSlo","vSlo",function(v){ sloTtftMs = v; }, function(v){ return v === 0 ? "off" : v + "ms"; });
+
+reset();
+setInterval(render, 200);   // keeps refill, lease countdowns and the clock live
+</script>
+</body>
+</html>

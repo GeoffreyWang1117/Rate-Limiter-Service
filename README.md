@@ -13,6 +13,13 @@ measures what that protocol costs.
   expire    reclaim holds whose owner never came back
 ```
 
+**[Interactive demo →](https://geoffreywang1117.github.io/Rate-Limiter-Service/)**
+Drive the protocol in a browser: send requests, complete them, or abandon one and
+watch the hold sit there until the lease expires and the next admission reclaims
+it. The page reimplements the admission logic from `src/llm/admission-scripts.ts`
+and says so — it is not the service, and nothing on it is a latency measurement.
+The measured numbers on that page come from the artifacts in `bench/results/`.
+
 ---
 
 ## Why LLM traffic needs a different limiter
