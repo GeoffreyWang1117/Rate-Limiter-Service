@@ -18,6 +18,15 @@ build/
 .env.local
 .env.*.local
 
+# Agent and tooling local state. .claude/settings.local.json routinely holds
+# machine paths and credentials, and it is in no standard template -- so it is
+# listed here before anything can create it, not after.
+.claude/
+*.pem
+__pycache__/
+.ipynb_checkpoints/
+.venv/
+
 # IDE
 .vscode/
 .idea/
