@@ -26,7 +26,10 @@ class PolicyResolver {
   async resolve(tenant: string, model: string): Promise<AdmissionPolicy> {
     await this.ensureLoaded();
 
-    const cacheKey = `${tenant} ${model}`;
+    // NUL-joined: tenant and model are free-form strings up to 128 chars, so a
+    // space would make ("a b", "c") and ("a", "b c") the same key and serve one
+    // pair the other's policy.
+    const cacheKey = `${tenant}\u0000${model}`;
     const hit = this.resolved.get(cacheKey);
     if (hit) return hit;
 
@@ -35,8 +38,8 @@ class PolicyResolver {
     );
 
     const policy: AdmissionPolicy = match
-      ? { ...match, tenant, model }
-      : { ...DEFAULT_POLICY, tenant, model };
+      ? { ...match, tenant, model, scope: `${match.tenantPattern}|${match.modelPattern}` }
+      : { ...DEFAULT_POLICY, tenant, model, scope: 'default' };
 
     this.resolved.set(cacheKey, policy);
     return policy;
@@ -59,6 +62,12 @@ class PolicyResolver {
         // cache this leaves the set empty and every lookup falls back to the
         // built-in default, which errs toward the conservative limit.
         logger.error('Failed to load admission policies; serving cached set', error);
+        // Clear the per-pair map even though the policy set is kept. Its keys
+        // come from an unauthenticated request body, and without this a caller
+        // cycling tenant names during a database outage grows the heap for the
+        // whole outage -- the success path clears it, so only the failure path
+        // could accumulate.
+        this.resolved.clear();
         this.loadedAt = Date.now();
       } finally {
         this.loading = null;

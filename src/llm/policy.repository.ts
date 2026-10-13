@@ -40,6 +40,7 @@ function toPolicy(row: PolicyRow): StoredPolicy {
     modelPattern: row.model_pattern,
     tenant: row.tenant_pattern,
     model: row.model_pattern,
+    scope: `${row.tenant_pattern}|${row.model_pattern}`,
     tokensPerMinute: Number(row.tokens_per_minute),
     requestsPerMinute: row.requests_per_minute,
     maxConcurrency: row.max_concurrency,

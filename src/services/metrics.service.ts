@@ -24,7 +24,7 @@ class MetricsService {
   public leaseReclaimsTotal: Counter;
   public lateCommitsTotal: Counter;
   public overrunTokensTotal: Counter;
-  public inflightRequests: Gauge;
+  public reservationsSettledTotal: Counter;
   public ruleMatchesTotal: Counter;
   public degradedResponsesTotal: Counter;
   public apiLatency: Histogram;
@@ -87,7 +87,7 @@ class MetricsService {
     this.admissionsTotal = new Counter({
       name: 'llm_admission_decisions_total',
       help: 'Admission decisions, labelled by outcome. `shed` outcomes carry the binding constraint.',
-      labelNames: ['tenant', 'model', 'outcome'],
+      labelNames: ['scope', 'outcome'],
       registers: [this.registry],
     });
 
@@ -97,42 +97,53 @@ class MetricsService {
     this.tokensReservedTotal = new Counter({
       name: 'llm_tokens_reserved_total',
       help: 'Tokens actually held at admission time',
-      labelNames: ['tenant', 'model'],
+      labelNames: ['scope'],
       registers: [this.registry],
     });
 
     this.tokensWorstCaseTotal = new Counter({
       name: 'llm_tokens_worst_case_total',
       help: 'Tokens that worst-case reservation would have held, for comparison against llm_tokens_reserved_total',
-      labelNames: ['tenant', 'model'],
+      labelNames: ['scope'],
       registers: [this.registry],
     });
 
     this.leaseReclaimsTotal = new Counter({
       name: 'llm_lease_reclaims_total',
       help: 'Expired reservations swept back into the budget. Sustained non-zero means clients are dying between reserve and commit.',
-      labelNames: ['tenant', 'model'],
+      labelNames: ['scope'],
       registers: [this.registry],
     });
 
     this.lateCommitsTotal = new Counter({
       name: 'llm_late_commits_total',
       help: 'Commits that arrived after their lease had already been reclaimed',
-      labelNames: ['tenant', 'model'],
+      labelNames: ['scope'],
       registers: [this.registry],
     });
 
     this.overrunTokensTotal = new Counter({
       name: 'llm_overrun_tokens_total',
       help: 'Tokens generated beyond what was reserved. Non-zero under adaptive reservation is expected; under worst_case it means max_tokens is not enforced upstream.',
-      labelNames: ['tenant', 'model'],
+      labelNames: ['scope'],
       registers: [this.registry],
     });
 
-    this.inflightRequests = new Gauge({
-      name: 'llm_inflight_requests',
-      help: 'Requests admitted but not yet committed',
-      labelNames: ['tenant', 'model'],
+    // A counter, not a gauge, and this is load-bearing.
+    //
+    // `inflight` is a per-(tenant, model) ZCARD. Under a catch-all policy every
+    // tenant resolves to the same scope, so a gauge set from that value has each
+    // commit overwrite the series with one arbitrary pair's count: tenant A can
+    // have 800 in flight and the series read 0 because tenant B just finished.
+    // Counters aggregate instead of overwriting, so in-flight work is derived:
+    //
+    //   sum(llm_admission_decisions_total{outcome="admit"}) by (scope)
+    //     - sum(llm_reservations_settled_total) by (scope)
+    //     - sum(llm_lease_reclaims_total) by (scope)
+    this.reservationsSettledTotal = new Counter({
+      name: 'llm_reservations_settled_total',
+      help: 'Reservations reconciled by a commit or a release. Admissions minus settlements minus reclaims is work in flight.',
+      labelNames: ['scope'],
       registers: [this.registry],
     });
 
@@ -207,30 +218,34 @@ class MetricsService {
     this.activeKeys.set({ algorithm }, count);
   }
 
-  recordAdmission(tenant: string, model: string, outcome: string): void {
-    this.admissionsTotal.inc({ tenant, model, outcome });
+  /**
+   * Admission metrics are labelled by policy scope, never by tenant or model.
+   *
+   * Those two arrive in an unauthenticated request body. Labelling by them meant
+   * every distinct string minted a permanent time series -- the registry never
+   * evicts -- so anyone able to reach /reserve could grow it without bound. The
+   * set of configured policies is bounded and operator-defined, and it is the
+   * dimension an operator can act on.
+   */
+  recordAdmission(scope: string, outcome: string): void {
+    this.admissionsTotal.inc({ scope, outcome });
   }
 
-  recordReservation(
-    tenant: string,
-    model: string,
-    reserved: number,
-    worstCase: number
-  ): void {
-    this.tokensReservedTotal.inc({ tenant, model }, reserved);
-    this.tokensWorstCaseTotal.inc({ tenant, model }, worstCase);
+  recordReservation(scope: string, reserved: number, worstCase: number): void {
+    this.tokensReservedTotal.inc({ scope }, reserved);
+    this.tokensWorstCaseTotal.inc({ scope }, worstCase);
   }
 
-  recordLeaseReclaim(tenant: string, model: string, count: number): void {
-    this.leaseReclaimsTotal.inc({ tenant, model }, count);
+  recordLeaseReclaim(scope: string, count: number): void {
+    this.leaseReclaimsTotal.inc({ scope }, count);
   }
 
-  recordLateCommit(tenant: string, model: string): void {
-    this.lateCommitsTotal.inc({ tenant, model });
+  recordLateCommit(scope: string): void {
+    this.lateCommitsTotal.inc({ scope });
   }
 
-  recordOverrun(tenant: string, model: string, tokens: number): void {
-    this.overrunTokensTotal.inc({ tenant, model }, tokens);
+  recordOverrun(scope: string, tokens: number): void {
+    this.overrunTokensTotal.inc({ scope }, tokens);
   }
 
   recordDegraded(surface: string, mode: string): void {
@@ -241,8 +256,8 @@ class MetricsService {
     this.ruleMatchesTotal.inc({ rule_id: ruleId, rule_name: ruleName });
   }
 
-  setInflight(tenant: string, model: string, count: number): void {
-    this.inflightRequests.set({ tenant, model }, count);
+  recordSettled(scope: string): void {
+    this.reservationsSettledTotal.inc({ scope });
   }
 }
 

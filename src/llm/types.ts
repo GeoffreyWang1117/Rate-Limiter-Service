@@ -127,6 +127,17 @@ export type ReservationMode = 'worst_case' | 'adaptive';
 export interface AdmissionPolicy {
   tenant: string;
   model: string;
+  /**
+   * Which configured policy governs this pair, as `tenantPattern|modelPattern`,
+   * or `default` for the built-in fallback.
+   *
+   * This exists to be a metric label. Tenant and model arrive in an
+   * unauthenticated request body, so labelling by them lets anyone who can reach
+   * the data plane mint Prometheus time series without limit. The set of
+   * policies is operator-defined and bounded, and "which policy is shedding" is
+   * the question an operator actually needs answered.
+   */
+  scope: string;
   /** Token budget per minute. The binding constraint for most LLM workloads. */
   tokensPerMinute: number;
   /** Request budget per minute. Guards against many tiny requests. */
@@ -143,7 +154,7 @@ export interface AdmissionPolicy {
   enabled: boolean;
 }
 
-export const DEFAULT_POLICY: Omit<AdmissionPolicy, 'tenant' | 'model'> = {
+export const DEFAULT_POLICY: Omit<AdmissionPolicy, 'tenant' | 'model' | 'scope'> = {
   tokensPerMinute: 100_000,
   requestsPerMinute: 600,
   maxConcurrency: 16,

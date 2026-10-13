@@ -118,22 +118,21 @@ class LlmAdmissionService {
     ] = raw;
 
     metricsService.recordAdmission(
-      tenant,
-      model,
+      policy.scope,
       admitted === 1 ? 'admit' : (reason as ShedReason)
     );
     if (reclaimed > 0) {
-      metricsService.recordLeaseReclaim(tenant, model, reclaimed);
+      metricsService.recordLeaseReclaim(policy.scope, reclaimed);
+      // Tenant and model are safe in a log line, where the cost of a new value
+      // is one more line, not one more permanent time series.
       logger.warn('Reclaimed expired reservations', { tenant, model, count: reclaimed });
     }
     if (admitted === 1) {
       metricsService.recordReservation(
-        tenant,
-        model,
+        policy.scope,
         reservedTokens,
         estimate.worstCaseTokens
       );
-      metricsService.setInflight(tenant, model, inflight);
     }
 
     return {
@@ -205,14 +204,14 @@ class LlmAdmissionService {
         reservationId,
         actual,
       });
-      metricsService.recordLateCommit(tenant, model);
+      metricsService.recordLateCommit(policy.scope);
     }
     if (refundedTokens < 0) {
       // The caller produced more than the ceiling it declared. Worth surfacing:
       // it means the ceiling is not being enforced upstream at the model.
-      metricsService.recordOverrun(tenant, model, -refundedTokens);
+      metricsService.recordOverrun(policy.scope, -refundedTokens);
     }
-    metricsService.setInflight(tenant, model, inflight);
+    metricsService.recordSettled(policy.scope);
 
     return {
       status: status === 2 ? 'reconciled_after_expiry' : 'committed',

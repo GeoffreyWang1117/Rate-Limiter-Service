@@ -7,6 +7,7 @@ const policy = (over: Partial<AdmissionPolicy> = {}): AdmissionPolicy => ({
   ...DEFAULT_POLICY,
   tenant: 'acme',
   model: 'test-model',
+  scope: 'acme|test-model',
   ...over,
 });
 

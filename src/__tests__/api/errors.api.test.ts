@@ -76,6 +76,36 @@ describe('metric labels cannot be driven by the caller', () => {
     expect(after).not.toMatch(/definitely-not-a-route\/\d/);
   });
 
+  it('does not mint an admission series per tenant name a stranger invents', async () => {
+    // The data plane is unauthenticated, so tenant and model are attacker-chosen
+    // strings. Labelling by them meant every new one created a permanent series
+    // -- prom-client never evicts -- and the registry grew for as long as anyone
+    // kept making names up. Admission metrics are labelled by the resolved
+    // policy scope instead, which is operator-defined and bounded.
+    const count = async (): Promise<number> => {
+      const text = await metricsService.getMetrics();
+      return text.split('\n').filter((l) => l.startsWith('llm_admission_decisions_total{')).length;
+    };
+
+    const before = await count();
+    for (let i = 0; i < 20; i++) {
+      await request(app)
+        .post('/api/v1/llm/reserve')
+        .send({
+          tenant: `stranger-${i}-${Math.random()}`,
+          model: `model-${i}-${Math.random()}`,
+          promptTokens: 10,
+          maxOutputTokens: 20,
+        });
+    }
+    const after = await count();
+
+    // Twenty distinct tenant/model pairs, all governed by the same policy.
+    expect(after - before).toBeLessThanOrEqual(2);
+    const text = await metricsService.getMetrics();
+    expect(text).not.toMatch(/llm_admission_decisions_total\{[^}]*stranger-/);
+  });
+
   it('counts an errored request once, not once per handler that saw it', async () => {
     const count = async (): Promise<number> => {
       const text = await metricsService.getMetrics();
