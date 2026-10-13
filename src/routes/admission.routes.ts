@@ -5,7 +5,7 @@ import policyResolver from '../llm/policy.resolver';
 import policyRepository from '../llm/policy.repository';
 import { validateRequest } from '../middleware/validate-request';
 import { ShedReason } from '../llm/types';
-import { NotFoundError } from '../utils/errors';
+import { ConflictError, NotFoundError, isUniqueViolation } from '../utils/errors';
 import { guardState } from '../middleware/degraded-mode';
 import { requireControlPlaneKey } from '../middleware/auth';
 
@@ -90,13 +90,13 @@ router.post(
   validateRequest(reserveSchema),
   guarded(async (req: Request, res: Response) => {
       const { tenant, model } = req.body;
+      // The resolver only ever loads enabled policies and its fallback is
+      // enabled, so `policy.enabled` is always true here. This used to carry a
+      // branch returning `{decision: 'admit', reason: 'policy_disabled'}`, which
+      // was unreachable and read as though disabling a policy turned admission
+      // off for that tenant. It does the opposite: a disabled policy is skipped,
+      // and the next matching one -- or the built-in default -- governs instead.
       const policy = await policyResolver.resolve(tenant, model);
-
-      if (!policy.enabled) {
-        res.status(200).json({ decision: 'admit', reason: 'policy_disabled' });
-        return;
-      }
-
       const result = await admissionService.reserve(req.body, policy);
 
       res.set({
@@ -202,6 +202,18 @@ router.post(
       policyResolver.invalidate();
       res.status(201).json({ data: policy });
     } catch (error) {
+      // unique_policy_scope. Without this the driver error reached the generic
+      // handler as a 500, so a caller was told the server had failed when it had
+      // in fact rejected a duplicate -- and the rules API, one router over,
+      // already answered 409 for exactly the same shape of mistake.
+      if (isUniqueViolation(error)) {
+        next(
+          new ConflictError(
+            `A policy already covers ${req.body.tenantPattern} / ${req.body.modelPattern}`
+          )
+        );
+        return;
+      }
       next(error);
     }
   }
@@ -217,6 +229,14 @@ router.put(
       policyResolver.invalidate();
       res.json({ data: policy });
     } catch (error) {
+      if (isUniqueViolation(error)) {
+        next(
+          new ConflictError(
+            'Another policy already covers that tenant and model pattern'
+          )
+        );
+        return;
+      }
       next(error);
     }
   }
