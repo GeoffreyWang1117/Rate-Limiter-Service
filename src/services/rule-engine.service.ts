@@ -6,7 +6,7 @@ import {
   DimensionType,
 } from '../types';
 import logger from '../utils/logger';
-import { matchPattern } from '../utils/pattern';
+import { matchPattern, matchRegex } from '../utils/pattern';
 
 /**
  * Rule Engine Service
@@ -120,10 +120,8 @@ class RuleEngineService {
       switch (operator) {
         case '=':
           return metadataValue === value;
-        case '~': {
-          const regex = new RegExp(value);
-          return regex.test(metadataValue);
-        }
+        case '~':
+          return matchRegex(metadataValue, value);
         default:
           return false;
       }
