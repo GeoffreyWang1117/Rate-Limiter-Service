@@ -360,6 +360,8 @@ Full request and response shapes: [API.md](API.md).
 | `ADMISSION_FAILURE_MODE` | `fail_closed` | LLM admission when Redis is unreachable |
 | `COMMIT_IDEMPOTENCY_TTL` | `300` | How long a settled reservation is remembered |
 | `SLOW_REQUEST_LOG_MS` | `250` | Above this, a request gets its own log line |
+| `MAX_BODY_SIZE` | `64kb` | Largest accepted request body; parsed on the thread that serves every other request |
+| `CORS_ORIGIN` | unset | Comma-separated origins. Unset means no cross-origin access, not all of it |
 
 The two failure modes differ deliberately. A limiter that returns 500 during a
 Redis blip has made itself a hard dependency of everything it fronts, so the

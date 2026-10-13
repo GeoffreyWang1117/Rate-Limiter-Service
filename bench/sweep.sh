@@ -44,7 +44,17 @@ for rate in "${RATES[@]}"; do
   gw0=$(cpu_ticks "$SVC_PID"); rd0=$(cpu_ticks "$REDIS_PID"); t0=$(date +%s.%N)
 
   log="$OUT/rate-${rate}.txt"
-  npx tsx bench/bench-admission.ts --duration "$DURATION" --rates "$rate" > "$log" 2>&1
+  # Written via a temp file and moved into place only on success. This script
+  # runs without `set -e`, so an unconditional move would let a failed run --
+  # connection refused, an exception mid-run -- overwrite a good committed
+  # artifact with its own error output, and the parser below would then print `?`
+  # rather than failing.
+  if npx tsx bench/bench-admission.ts --duration "$DURATION" --rates "$rate" > "$log.part" 2>&1; then
+    mv -f "$log.part" "$log"
+  else
+    echo "  rate $rate: run failed, keeping the previous $log" >&2
+    rm -f "$log.part"
+  fi
 
   t1=$(date +%s.%N); gw1=$(cpu_ticks "$SVC_PID"); rd1=$(cpu_ticks "$REDIS_PID")
   wall=$(echo "$t1 - $t0" | bc)

@@ -1,10 +1,9 @@
 import { Router, Request, Response } from 'express';
 import redisService from '../services/redis.service';
 import postgresService from '../services/postgres.service';
+import { VERSION } from '../version';
 
 const router = Router();
-
-const VERSION = process.env.npm_package_version ?? '2.0.0';
 
 /**
  * GET /health -- full dependency report, for humans and for uptime checks.

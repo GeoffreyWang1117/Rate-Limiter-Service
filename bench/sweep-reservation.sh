@@ -32,7 +32,12 @@ printf '  %14s  %12s  %10s  %10s  %9s  %10s\n' \
 
 for m in "${MEDIANS[@]}"; do
   log="$OUT/reservation-median-$m.txt"
-  npx tsx bench/bench-reservation.ts --url "$BASE" --output-median "$m" > "$log" 2>&1
+  if npx tsx bench/bench-reservation.ts --url "$BASE" --output-median "$m" > "$log.part" 2>&1; then
+    mv -f "$log.part" "$log"
+  else
+    echo "  median $m: run failed, keeping the previous $log" >&2
+    rm -f "$log.part"
+  fi
 
   unused=$(grep -oE '\(([0-9.]+)% of the declaration is never generated\)' "$log" \
            | grep -oE '[0-9.]+' | head -1)

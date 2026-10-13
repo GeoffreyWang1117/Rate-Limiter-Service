@@ -10,6 +10,7 @@ import admissionRoutes from './routes/admission.routes';
 import healthRoutes from './routes/health.routes';
 import metricsRoutes from './routes/metrics.routes';
 import logger from './utils/logger';
+import { VERSION } from './version';
 
 export function createApp(): Application {
   const app = express();
@@ -59,7 +60,7 @@ export function createApp(): Application {
   app.get('/', (_req, res) => {
     res.json({
       service: 'Rate Limiter Service',
-      version: '2.0.0',
+      version: VERSION,
       status: 'running',
       endpoints: {
         llmReserve: 'POST /api/v1/llm/reserve',

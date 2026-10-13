@@ -57,6 +57,11 @@ tmp/
 # Local dev stack data (Redis AOF, Postgres cluster, service logs)
 .devstack/
 
+# In-progress benchmark output. Sweeps write <file>.part and move it into place,
+# so a killed run leaves one of these behind; it must never be committed as
+# though it were a complete artifact.
+bench/results/*.part
+
 # bench/results/ is deliberately NOT ignored. Every number in README.md is read
 # out of a file in there, so ignoring it would leave the claims in the docs with
 # no artifact behind them -- which is the thing this repository exists to not do.

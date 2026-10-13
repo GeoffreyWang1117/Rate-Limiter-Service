@@ -28,6 +28,10 @@ redis_up() {
   if "$BIN/redis-cli" -p "$REDIS_PORT" ping >/dev/null 2>&1; then
     log "redis already up on :$REDIS_PORT"; return
   fi
+  # noeviction, matching docker-compose.yml. allkeys-lru would evict live
+  # rate-limit counters under memory pressure, silently resetting budgets -- and
+  # this is the environment every published benchmark number was measured in, so
+  # it must not be able to quietly change the thing being measured.
   mkdir -p "$STACK/redis"
   "$BIN/redis-server" \
     --port "$REDIS_PORT" \
@@ -35,7 +39,7 @@ redis_up() {
     --daemonize yes \
     --appendonly yes \
     --maxmemory 256mb \
-    --maxmemory-policy allkeys-lru \
+    --maxmemory-policy noeviction \
     --save '' \
     --pidfile "$STACK/redis/redis.pid" \
     --logfile "$STACK/redis/redis.log"

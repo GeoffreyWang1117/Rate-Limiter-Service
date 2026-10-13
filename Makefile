@@ -59,4 +59,7 @@ docker-down:
 	docker compose down
 
 clean:
-	rm -rf dist coverage node_modules bench/results
+	# bench/results is deliberately not here. It is the evidence behind every
+	# number in README.md, it is committed, and regenerating it takes a quiet
+	# machine and twelve minutes.
+	rm -rf dist coverage node_modules
