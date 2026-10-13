@@ -404,11 +404,12 @@ footer a{color:var(--ink-2)}
       EWMA estimator. It is <b>not</b> the service: there is no Redis, no PostgreSQL and no
       network here, so nothing on this page is a latency measurement. Real numbers are
       <a href="#measured">below</a>, and they come from committed artifacts.
-      Two deliberate differences: the lease default is 8&nbsp;s rather than 120&nbsp;s and
-      the budget is scaled down, both so that expiry and refill are observable at human
-      speed; and this simulator applies refill on commit, which the production Lua currently
-      does not &mdash; a defect recorded in
-      <a href="https://github.com/GeoffreyWang1117/Rate-Limiter-Service/blob/HEAD/PROJECT_ENGINEERING_GUIDE.md">the engineering guide</a>, §17.1.
+      One deliberate difference: the lease default is 8&nbsp;s rather than 120&nbsp;s and the
+      budget is scaled down, both so that expiry and refill are observable at human speed.
+      An earlier version of this page also noted that the simulator applied refill on commit
+      while the production Lua did not &mdash; that defect has since been
+      <a href="https://github.com/GeoffreyWang1117/Rate-Limiter-Service/blob/HEAD/src/llm/admission-scripts.ts">fixed</a>,
+      with a regression test that fails against the old script, so the two now agree.
     </div>
   </section>
 

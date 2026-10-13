@@ -170,12 +170,27 @@ local output_tokens = tonumber(ARGV[7])
 local alpha         = tonumber(ARGV[8])
 local idem_ttl      = tonumber(ARGV[9])
 
+-- Derived rather than passed in, because the caller computes it as limit/60 for
+-- the admission script, and two parameters that must agree are one parameter
+-- too many.
+local tpm_rate = tpm_limit / 60
+
+-- Reading the balance means accruing the time since it was last written. Admit
+-- and snapshot both do this; a commit that skipped it reported a balance lower
+-- than the tenant actually had.
+local function current_balance()
+  local bal = tonumber(redis.call('GET', tpm_key))
+  local ts  = tonumber(redis.call('GET', tpm_ts_key))
+  if bal == nil or ts == nil then return tpm_limit end
+  return math.min(bal + (math.max(0, now - ts) / 1000) * tpm_rate, tpm_limit)
+end
+
 -- Replay of a commit already applied. Report the balance as it stands and
--- change nothing.
+-- change nothing -- in particular, do not advance the refill clock, because
+-- nothing here consumed the accrual it would discard.
 local settled_refund = tonumber(redis.call('GET', settled_key))
 if settled_refund then
-  local current = tonumber(redis.call('GET', tpm_key)) or tpm_limit
-  return {3, math.floor(settled_refund), math.floor(current), redis.call('ZCARD', leases_key)}
+  return {3, math.floor(settled_refund), math.floor(current_balance()), redis.call('ZCARD', leases_key)}
 end
 
 local held = tonumber(redis.call('HGET', res_key, rid))
@@ -191,9 +206,16 @@ else
   redis.call('ZREM', leases_key, rid)
 end
 
-local bal = tonumber(redis.call('GET', tpm_key))
-local ts  = tonumber(redis.call('GET', tpm_ts_key))
-if bal == nil or ts == nil then bal = tpm_limit end
+-- Accrue the time that passed since the balance was last written, then settle.
+--
+-- This used to read the timestamp only to test it for nil, apply the refund to a
+-- stale balance, and then set the timestamp to now anyway -- so the whole
+-- interval between a reservation and its commit, which is the entire generation
+-- window, earned the tenant nothing. Measured at 600,000 tokens/minute, five
+-- seconds of generation silently cost 50,020 tokens of accrual. It is the same
+-- defect as the sub-token refill bug in the generic token bucket, on the other
+-- path: a clock advanced without the accrual that advancing it should pay for.
+local bal = current_balance()
 
 -- Negative when the caller generated more than it declared. The balance is
 -- allowed to go below zero: the overrun is real consumption and the tenant

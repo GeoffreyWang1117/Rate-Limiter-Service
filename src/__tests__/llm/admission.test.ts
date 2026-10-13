@@ -167,6 +167,80 @@ describe('commit', () => {
     expect(result.inflight).toBe(0);
   });
 
+  it('credits the time that passed while the request was generating', async () => {
+    // The whole point of a token bucket is that it accrues with wall time. A
+    // commit both reads the balance and writes it back, so if it settles against
+    // a stale balance and then advances the refill clock anyway, the entire
+    // generation window -- seconds, on every single request -- earns the tenant
+    // nothing. That is what this asserts, and what the previous tests missed:
+    // they check refund arithmetic, which was always right, rather than refill
+    // arithmetic, which was not.
+    const p = policy({ tokensPerMinute: 600_000 }); // 10,000 tokens/second
+    const big = { promptTokens: 100_000, maxOutputTokens: 200_000 };
+
+    const first = await admission.reserve(req(big), p);
+    const second = await admission.reserve(req(big), p);
+    expect(first.decision).toBe('admit');
+    expect(second.decision).toBe('admit');
+    // 600,000 - 300,000 - 300,000; the bucket is on the floor.
+    expect(second.tokensRemaining).toBeLessThan(1_000);
+
+    // Measure the interval rather than assume the sleep was honoured: on a
+    // loaded machine a 500ms scheduler stall would otherwise fail a correct
+    // implementation.
+    const before = Date.now();
+    await sleep(1_000); // ~10,000 tokens accrue while generation runs
+    const elapsedMs = Date.now() - before;
+
+    const settled = await admission.commit(
+      {
+        tenant: 'acme',
+        model: 'test-model',
+        reservationId: first.reservationId!,
+        promptTokens: 100_000,
+        outputTokens: 0,
+      },
+      p
+    );
+
+    expect(settled.refundedTokens).toBe(200_000);
+    // The old script credited zero accrual and landed on ~200,000. Half the
+    // measured elapsed time is a floor no correct implementation can miss and no
+    // stall can reach, and the ceiling allows the extra interval spent inside
+    // the two round trips.
+    const accrued = (elapsedMs / 1000) * 10_000;
+    expect(settled.tokensRemaining).toBeGreaterThan(200_000 + accrued * 0.5);
+    expect(settled.tokensRemaining).toBeLessThan(200_000 + accrued * 2);
+  });
+
+  it('reports an accrued balance on a duplicate commit without banking it', async () => {
+    // The replay path returns early. It must still report what the tenant
+    // actually has -- admit and snapshot both accrue on read -- but it must not
+    // write, because advancing the clock on a call that settles nothing would
+    // discard the accrual it just reported.
+    const p = policy({ tokensPerMinute: 600_000 });
+    const reserved = await admission.reserve(
+      req({ promptTokens: 100_000, maxOutputTokens: 400_000 }),
+      p
+    );
+    const body = {
+      tenant: 'acme',
+      model: 'test-model',
+      reservationId: reserved.reservationId!,
+      promptTokens: 100_000,
+      outputTokens: 0,
+    };
+
+    const once = await admission.commit(body, p);
+    await sleep(600);
+    const twice = await admission.commit(body, p);
+
+    expect(twice.status).toBe('duplicate_ignored');
+    expect(twice.refundedTokens).toBe(once.refundedTokens);
+    // Same settlement, but 600ms of accrual has happened since.
+    expect(twice.tokensRemaining).toBeGreaterThan(once.tokensRemaining);
+  });
+
   it('charges an overrun as a negative refund instead of writing it off', async () => {
     const p = policy({ tokensPerMinute: 10_000, reservationMode: 'adaptive' });
     const reserved = await admission.reserve(req({ maxOutputTokens: 50 }), p);

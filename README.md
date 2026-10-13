@@ -414,6 +414,19 @@ catch a broken entrypoint.
 
 ## Engineering log
 
+**The commit path did not accrue.** `COMMIT_SCRIPT` read the refill timestamp,
+used it only to test for nil, settled the refund against a stale balance, and
+then advanced the timestamp to `now` anyway. The interval between a reservation
+and its commit -- the entire generation window, seconds on every request --
+therefore earned the tenant nothing. At 600,000 tokens/minute, five seconds of
+generation silently cost 50,020 tokens of accrual. It is the same defect as the
+sub-token refill bug below, on the other path: a clock advanced without the
+accrual that advancing it should pay for. Found by writing the handoff guide, not
+by a test, because the admission tests assert refund arithmetic -- which was
+always right -- rather than refill arithmetic. The regression test added with the
+fix reproduces 200,010 against the old script where the corrected one gives
+210,000.
+
 Several of the defects below were found by measuring rather than by testing,
 which is the reason the benchmarks exist. Two of them were in the benchmarks, and
 two published numbers did not survive being re-measured. Those are kept here
