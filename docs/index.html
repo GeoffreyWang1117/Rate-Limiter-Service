@@ -556,7 +556,7 @@ footer a{color:var(--ink-2)}
       <li><b>No production trace.</b> Output lengths are drawn from an assumed distribution, which is why the reservation result is a sweep rather than a number.</li>
       <li><b>No LLM is behind the gateway in any benchmark.</b> Admission decides before generation starts; the measurements cover the decision and the accounting, not end-to-end serving.</li>
       <li><b>Redis Cluster has never been deployed.</b> Keys carry hash tags so multi-key scripts stay in one slot, but that is a claim about key layout, not a tested deployment.</li>
-      <li><b>Three defects are open and documented</b>, including a missing refill on the commit path. They are recorded rather than quietly fixed, with reproductions.</li>
+      <li><b>Defects are recorded before they are fixed</b>, with a reproduction each. The three found by the last audit &mdash; a missing refill on the commit path, a duplicate-policy 500 that the docs promised as a 409, and an unreachable branch implying a disabled policy turned admission off &mdash; are now closed, each with a test that fails against the old code.</li>
     </ul>
   </section>
 

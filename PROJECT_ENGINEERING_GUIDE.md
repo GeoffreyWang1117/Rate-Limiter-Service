@@ -8,10 +8,11 @@ experiment artifacts, and by probing a running instance. It is not a summary of
 `README.md`; where the two disagree, this document states the code's behaviour
 and names the discrepancy.
 
-**Audit date:** 2026-09-08
-**Branch documented:** `feat/llm-admission-control` @ `252ae91` (repository default)
-**Scope:** documentation only. No source, config, test or artifact was modified
-to produce this. Defects found are recorded, not fixed.
+**Audit date:** 2026-09-08; revised 2026-09-17 after the defects it found were fixed
+**Branch documented:** `feat/llm-admission-control` (repository default, now public)
+**Scope:** the original pass was documentation only — defects were recorded, not
+fixed, so that each fix could land as a reviewable change. Section 17 now records
+both the defect and how it was closed.
 
 ## Evidence tags
 
@@ -73,7 +74,8 @@ path, not in it: a gateway calls `reserve` before dispatching to a model and
 | Security-audited; 11 confirmed findings fixed | `[GIT: 84c723b, d681d67]`, `[DOC: SECURITY.md]` |
 | Has never run outside one workstation and CI | `[INFERRED]` — no deployment manifests, no infra-as-code, no staging references |
 | Redis Cluster support is a key-layout claim, never exercised | `[DOC: docs/DESIGN.md]`, `[CODE]` — hash tags present, no cluster client |
-| Three defects found during **this** audit remain open | `[PROBE]` — see §17 |
+| The three defects this audit found are closed, each with a test that fails against the old code | `[TEST]` — see §17 |
+| Published as a GitHub Pages demo with an interactive protocol simulator | `docs/index.html` |
 
 The repository was **transformed on a single day**, 2026-09-06, from a
 non-functioning HTTP rate limiter into this. See §2.
@@ -116,7 +118,7 @@ Real, exercised, and covered by tests:
 | No priority classes; batch and interactive contend identically | `[DOC: docs/DESIGN.md]` |
 | One EWMA per (tenant, model), not per prompt shape | `[CODE: src/llm/admission-scripts.ts:217-224]` |
 | Data plane is unauthenticated by design | `[CODE: src/middleware/auth.ts:11-14]` |
-| **Commit discards refill accrued since the last balance write** | `[PROBE]` — §17.1, previously unrecorded |
+| Host contention dominates the measured tail above ~2,000 cycles/s | `[ARTIFACT]` |
 
 ## 1.6 The most important architectural idea
 
@@ -1362,10 +1364,12 @@ governing rule.
 
 ---
 
-# 17. Defects found during this audit
+# 17. Defects found by the handoff audit
 
-All confirmed against a running instance. **None were fixed** — this was a
-documentation-only pass.
+All were confirmed against a running instance, recorded here first, and **closed
+in a separate change** so that each fix is reviewable on its own rather than a
+side effect of writing documentation. Each carries a test that fails against the
+code as it was.
 
 ## 17.1 `COMMIT_SCRIPT` discards refill accrued since the last balance write
 
@@ -1409,10 +1413,23 @@ budget receives 429.
 follows a measurable delay. `src/__tests__/llm/admission.test.ts` asserts refund
 arithmetic, not refill arithmetic.
 
-**Not fixed here.** The shape of a fix is to apply the same `refill()` helper
-`ADMIT_SCRIPT` uses before applying the refund — but note the ordering question
-(refill-then-refund vs refund-then-refill) changes behaviour at the `tpm_limit`
-clamp, and both `SNAPSHOT_SCRIPT` and `ADMIT_SCRIPT` would need to agree.
+**Fixed.** `COMMIT_SCRIPT` now derives the rate from the limit (`tpm_limit / 60`,
+the same value the caller computes for the admission script — two parameters that
+must agree are one parameter too many) and accrues before settling, through a
+`current_balance()` helper shared with the duplicate-commit path. Order is
+refill-then-refund, so the clamp at `tpm_limit` applies to the settled total, the
+same way `ADMIT_SCRIPT` clamps after adding reclaimed tokens.
+
+The replay path was wrong in a quieter way and is fixed too: it returned the raw
+stored balance, so a duplicate commit reported less than the tenant actually had.
+It now reports the accrued balance **without writing**, because advancing the
+clock on a call that settles nothing would discard the accrual it just reported.
+
+Two regression tests in `src/__tests__/llm/admission.test.ts`, both verified
+against the old script: `credits the time that passed while the request was
+generating` gets 200,010 there against a `> 205,000` assertion, and `reports an
+accrued balance on a duplicate commit without banking it` sees no change where it
+requires one.
 
 ## 17.2 Duplicate policy scope returns 500, documentation says 409
 
@@ -1433,6 +1450,11 @@ exists — `isUniqueViolation()` and `ConflictError` are exported from
 `src/utils/errors.ts:47-63` and simply are not used here.
 
 **Documentation conflict.** `API.md:174` and `README.md` both state 409.
+
+**Fixed.** `admission.routes.ts` now maps the violation on both create and
+update, matching where `rules.routes.ts` already did it. Confirmed live: the
+second create returns `409 CONFLICT` with
+`A policy already covers <tenant> / <model>`.
 
 ## 17.3 `enabled: false` on a policy is dead code at the route
 
@@ -1459,6 +1481,10 @@ the `*` catch-all. `reason: policy_disabled` never appears.
 consideration*, so the next-highest match or the default applies. It does **not**
 disable admission control. Any operator reading the route would conclude the
 opposite.
+
+**Fixed.** The branch is deleted and replaced by a comment stating what
+`enabled: false` does, at the point where a reader would otherwise infer the
+wrong thing.
 
 ## 17.4 Prometheus labels are driven by the unauthenticated data plane
 
@@ -1488,6 +1514,14 @@ that fix removed `req.path` as a label but left tenant/model in place.
 label and then always passes the literal `'unknown'` `[CODE:179]` — cardinality-safe
 but a dead label.
 
+**Fixed.** `AdmissionPolicy` gained a `scope` field — `tenantPattern|modelPattern`
+for a stored policy, `default` for the built-in fallback — and every admission
+metric is labelled by it. The set of policies is operator-defined and bounded, and
+"which policy is shedding" is the question an operator can act on; tenant and
+model still appear in log lines, where a new value costs one line rather than one
+permanent series. `src/__tests__/api/errors.api.test.ts` fires twenty invented
+tenant names and asserts the series count does not move.
+
 ## 17.5 Dev stack and Docker disagree about Redis eviction policy
 
 **Severity: low today, latent.** `[PROBE][CODE]`
@@ -1506,6 +1540,9 @@ that policy.
 a 256 MB cap `[PROBE]`. The published numbers are not compromised. A longer or
 larger run could cross the cap, and the failure would be silent.
 
+**Fixed.** `scripts/devstack.sh` now starts Redis with `noeviction`, matching
+compose.
+
 ## 17.6 `MAX_BODY_SIZE` is read but documented nowhere
 
 **Severity: low.** `[CODE][PROBE]`
@@ -1514,15 +1551,19 @@ Read at `src/app.ts:45`. Absent from `.env.example` and from `README.md`'s
 configuration table. An operator cannot discover the knob that controls how much
 JSON a caller may make the event loop parse.
 
+**Fixed.** Both now document it, along with `CORS_ORIGIN`. A cross-check of every
+`process.env` read in `src/` against `.env.example` now comes back empty.
+
 ## 17.7 Smaller items
 
 | Item | Location | Note |
 |---|---|---|
-| `new RegExp(value)` on an operator-supplied pattern | `src/services/rule-engine.service.ts` `matchCustomPattern` | ReDoS reachable through a stored rule. Control-plane gated, so it requires the API key |
-| Stale version string `2.0.0` | `src/app.ts:62`, `src/routes/health.routes.ts:7` | `package.json` says `3.0.0` |
-| `@types/uuid` still in devDependencies | `package.json` | The runtime dependency was removed in `d681d67` |
-| Non-atomic artifact writes | all `bench/*.sh` | A killed run leaves a truncated file that parsers accept |
-| `bench/repeat.sh` destroys prior results | `bench/repeat.sh:22` | `rm -rf bench/results/repeat` with no versioning |
+| `new RegExp(value)` on an operator-supplied pattern | `src/services/rule-engine.service.ts` `matchCustomPattern` | **Fixed** — routed through `matchRegex()` in `src/utils/pattern.ts`, which caches the compiled form, caps the subject at 256 characters and rejects the pattern shapes that backtrack catastrophically. The first guard written here was a regex that never matched `(a+)+$`; measured through it, that pattern took **167 s** against 200 characters, and 3 ms through the scanner that replaced it. The cap alone was never sufficient — blowup is exponential in subject length, not superlinear |
+| Stale version string `2.0.0` | `src/app.ts:62`, `src/routes/health.routes.ts:7` | **Fixed** — `src/version.ts` reads `package.json` at startup; `/health` and `/` now report `3.0.0` |
+| `@types/uuid` still in devDependencies | `package.json` | **Fixed** — removed |
+| Non-atomic artifact writes | all `bench/*.sh` | **Fixed** — sweeps write `<file>.part` and `mv` it into place |
+| `bench/repeat.sh` destroys prior results | `bench/repeat.sh:22` | Still true. `rm -rf bench/results/repeat` with no versioning; copy a set out before re-running |
+| `make clean` deleted `bench/results` | `Makefile` | **Fixed** — removed from the target; it is committed provenance, not scratch |
 
 ---
 
@@ -1530,12 +1571,12 @@ JSON a caller may make the event loop parse.
 
 | # | Documentation says | Code does | Where |
 |---|---|---|---|
-| 1 | `POST /api/v1/llm/policies` returns **409** on a duplicate scope | Returns **500** | `API.md:174`, `README.md` vs `src/llm/policy.repository.ts:109` |
-| 2 | The `policy_disabled` path implies `enabled:false` turns admission off | The branch is unreachable; a disabled policy is merely skipped | `src/routes/admission.routes.ts:95` |
+| 1 | ~~`POST /api/v1/llm/policies` returns **409**~~ | **Resolved** — the code now returns 409, matching the docs | `src/routes/admission.routes.ts` |
+| 2 | ~~The `policy_disabled` path implies `enabled:false` turns admission off~~ | **Resolved** — the unreachable branch is gone, replaced by a comment saying what the flag does | `src/routes/admission.routes.ts` |
 | 3 | `README.md` metrics table: "`rate_limiter_api_latency_seconds` labelled by route template, not path" | The label is literally **named** `path`; it *holds* a template | `src/services/metrics.service.ts:57-62` |
-| 4 | Service version `2.0.0` | `package.json` version is `3.0.0` | `src/app.ts:62` |
-| 5 | `.env.example` is presented as the complete configuration surface | `MAX_BODY_SIZE` is read but absent | `.env.example` vs `src/app.ts:45` |
-| 6 | Compose comments warn that `allkeys-lru` silently resets budgets | The dev stack uses `allkeys-lru` | `docker-compose.yml:85` vs `scripts/devstack.sh:38` |
+| 4 | ~~Service version `2.0.0`~~ | **Resolved** — read from `package.json` via `src/version.ts` | `src/version.ts` |
+| 5 | ~~`.env.example` is incomplete~~ | **Resolved** — `MAX_BODY_SIZE` and `CORS_ORIGIN` documented; the cross-check is empty | `.env.example` |
+| 6 | ~~Compose warns about `allkeys-lru`; the dev stack used it~~ | **Resolved** — the dev stack uses `noeviction` | `scripts/devstack.sh` |
 
 Documentation that is **accurate and unusually careful**, and worth trusting:
 the engineering log's retractions, the `bench/results/README.md` real-vs-assumed
@@ -1648,7 +1689,7 @@ Recovered from assertions, tests, script structure and documentation.
 | 14 | The benchmark refuses to report a burst that did not start from a full budget | Explicit throw in `bench-reservation.ts` `[CODE]` |
 | 15 | `worst_case` admission count is independent of the output distribution | Not asserted in code; used as a **manual** consistency check on sweep output `[ARTIFACT]` |
 | 16 | Every published number has a committed artifact | Convention; `bench/results/` is not gitignored `[CODE: .gitignore]` |
-| 17 | **Violated:** the token budget accrues continuously with wall time | §17.1 — commit breaks this |
+| 17 | The token budget accrues continuously with wall time, on every path that reads or writes it | `[TEST]` — was violated by the commit path; see §17.1 |
 
 ---
 
@@ -1710,10 +1751,12 @@ gateway.
 `src/middleware/request-logger.ts` · `src/middleware/error-handler.ts` ·
 the test suite · `scripts/devstack.sh` · `bench/repeat.sh`
 
-### Active — current, but with known open defects
+### Active — current, no known open defects
 
-`src/llm/policy.repository.ts` (§17.2) · `src/routes/admission.routes.ts` (§17.3) ·
-`src/services/metrics.service.ts` (§17.4) · `src/app.ts` (§17.6)
+`src/llm/policy.repository.ts` · `src/routes/admission.routes.ts` ·
+`src/services/metrics.service.ts` · `src/app.ts` · `src/version.ts` ·
+`src/utils/pattern.ts`. Everything listed in §17 is closed; what remains open is
+in §24.
 
 ### Experimental — implemented, not validated
 
@@ -1753,18 +1796,12 @@ the unauthenticated data plane.
 
 | Item | Risk | Location |
 |---|---|---|
-| **Commit path has no refill** | Systematic under-crediting of every tenant | §17.1 |
-| Two independent unique-violation handling paths, one of them missing | Inconsistent API contract | `policy.repository.ts` vs `rule.repository.ts` |
-| Metric labels sourced from unauthenticated input | Unbounded registry growth | §17.4 |
 | `now` supplied by the gateway, not Redis | Clock skew across replicas silently shifts lease expiry | `admission.service.ts:85,181` |
+| Unique-violation mapping lives in the route layer, duplicated per router | A new router that writes a constrained table will forget it | `rules.routes.ts`, `admission.routes.ts` |
 | EWMA with a blunt safety factor instead of a quantile | Overrun rate cannot be configured directly; the repository names this itself | `docs/DESIGN.md` |
 | `avg_svc` falls back to a constant when callers omit `serviceMs` | `slo_infeasible` decisions become arbitrary | `admission-scripts.ts:80` |
-| Dead branch implying `enabled:false` disables admission | Operator misconfiguration | §17.3 |
-| Benchmark artifacts written non-atomically and overwritten in place | Silent corruption of the evidence base | `bench/*.sh` |
-| `make clean` deletes `bench/results` | One command destroys all provenance | `Makefile:62` |
+| `bench/repeat.sh` still `rm -rf`s its own output directory | One re-run destroys the previous five-sweep set | `bench/repeat.sh:22` |
 | Measured stack ≠ deployed stack (Redis 8 vs 7, PG 18 vs 16, Node 26 vs 22) | Published numbers may not transfer | §12.1 |
-| Two version strings hardcoded to `2.0.0` | Health output misidentifies the build | `app.ts`, `health.routes.ts` |
-| `@types/uuid` orphaned | Cosmetic | `package.json` |
 | No test sends SIGTERM | Graceful shutdown is unverified | — |
 | `resolved` map unbounded within a 30 s window | Memory spike under high tenant cardinality | `policy.resolver.ts:41` |
 
@@ -1973,28 +2010,24 @@ bench/logging-ab.sh  (SLOW_REQUEST_LOG_MS=0 vs 250, same binary, back to back)
 
 # 29. Open questions
 
-1. **Why does `COMMIT_SCRIPT` not refill?** (§17.1) Deliberate simplification or
-   oversight? The scripts' comments are unusually thorough everywhere else, and
-   this one is silent — which weakly suggests oversight `[INFERRED]`, but nothing
-   confirms it.
-2. **What caused the unreproducible p99 2,538 ms measurement?** Never identified.
+1. **What caused the unreproducible p99 2,538 ms measurement?** Never identified.
    Until it is, the current numbers carry an unquantified risk of the same
    mechanism recurring.
-3. **Were the two branches (`tokengate` and this one) meant to be reconciled?**
+2. **Were the two branches (`tokengate` and this one) meant to be reconciled?**
    Neither references the other. Should the archived OpenAI adapter, tokenizer
    and deployment configs be brought forward?
-4. **Was any network policy or mesh mTLS ever specified for the unauthenticated
+3. **Was any network policy or mesh mTLS ever specified for the unauthenticated
    data plane?** `SECURITY.md` says it "belongs behind network policy" but names
    none.
-5. **Is the generic HTTP limiter in scope?** It is fully working and tested but
+4. **Is the generic HTTP limiter in scope?** It is fully working and tested but
    orthogonal to the project's thesis. Keeping it costs maintenance; removing it
    deletes ~1,000 lines and 30 tests.
-6. **Should `now` come from Redis rather than the gateway?** The clock-skew
+5. **Should `now` come from Redis rather than the gateway?** The clock-skew
    assumption is undocumented.
-7. **What is the intended deployment target?** No Kubernetes manifests, no
+6. **What is the intended deployment target?** No Kubernetes manifests, no
    Terraform, no cloud references. The Docker compose stack is a local
    development convenience, not a deployment `[INFERRED]`.
-8. **Why do CI and Docker pin Redis 7 / PostgreSQL 16 while every measurement was
+7. **Why do CI and Docker pin Redis 7 / PostgreSQL 16 while every measurement was
    taken on Redis 8 / PostgreSQL 18?** No commit or comment explains the choice.
 
 ---
@@ -2026,5 +2059,5 @@ Can a stranger answer these from this document alone?
 | 19 | Where do the final numbers come from? | 27 |
 | 20 | Could someone take this over tomorrow? | Yes, with the caveats in 29 |
 
-**Remaining dependence on the original author:** questions 1, 2, 3, 6 and 8 in
+**Remaining dependence on the original author:** questions 1, 2, 5 and 7 in
 §29 cannot be answered from the repository. Everything operational can.
