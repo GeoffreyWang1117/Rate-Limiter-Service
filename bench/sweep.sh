@@ -61,6 +61,23 @@ for rate in "${RATES[@]}"; do
   gwcpu=$(echo "scale=1; ($gw1 - $gw0) / $CLK / $wall * 100" | bc)
   rdcpu=$(echo "scale=1; ($rd1 - $rd0) / $CLK / $wall * 100" | bc)
 
+  # Append the CPU figures to the artifact. They are computed here rather than
+  # by bench-admission.ts, which cannot see the gateway and Redis processes, so
+  # without this they existed only in this script's stdout -- and README quotes
+  # them. Every other published number is read out of a committed file; this
+  # column was the exception, and an unsourced number in a document whose whole
+  # claim is that its numbers are sourced is the one kind of gap worth closing.
+  if [ -f "$log" ]; then
+    {
+      printf 'process cpu during this rate, %% of one core\n'
+      printf '  gateway %s%%   redis %s%%   wall %.1fs\n' \
+        "$gwcpu" "$rdcpu" "$wall"
+      printf '  Node serves HTTP on one thread, so a gateway figure approaching 100\n'
+      printf '  means this process is saturated and the next replica -- not a faster\n'
+      printf '  machine -- is what adds capacity.\n'
+    } >> "$log"
+  fi
+
   # Pull the single data row out of the reserve-latency table.
   read -r achieved p50 p95 p99 max <<<"$(
     awk -v r="$rate" '$1 == r && NF >= 10 { print $2, $4, $5, $6, $8; exit }' "$log"

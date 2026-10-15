@@ -14,7 +14,7 @@ how much of the burst fits in the budget
 
         mode  admitted  shed  admitted %  mean held  mean used  held but unused %
   ----------  --------  ----  ----------  ---------  ---------  -----------------
-  worst_case        75   325        18.8       5341       1471               72.5
+  worst_case        75   325        18.8       5341       1472               72.4
     adaptive       230   170        57.5       1739       1516               12.9
 
 what adaptive gives up for it

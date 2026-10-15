@@ -8,17 +8,17 @@ target http://127.0.0.1:3055   20s per rate   open loop
 
 reserve latency (ms) -- the phase that sits between a user and their first token
 
-  offered rps  achieved rps      n   p50   p95    p99   p99.9     max  admitted  shed  errors
-  -----------  ------------  -----  ----  ----  -----  ------  ------  --------  ----  ------
-         2500          2500  49999  0.73  1.61  29.01  154.76  188.00     49999     0       0
+  offered rps  achieved rps      n   p50   p95   p99  p99.9    max  admitted  shed  errors
+  -----------  ------------  -----  ----  ----  ----  -----  -----  --------  ----  ------
+         2500          2499  49999  0.72  1.18  2.45  24.94  31.53     49999     0       0
 
 commit latency (ms) -- off the critical path, after generation finishes
 
-  offered rps      n   p50   p95    p99     max
-  -----------  -----  ----  ----  -----  ------
-         2500  49999  0.58  1.57  14.13  108.32
+  offered rps      n   p50   p95   p99    max
+  -----------  -----  ----  ----  ----  -----
+         2500  49999  0.58  1.16  2.30  30.74
 
 node v26.7.0  platform linux  cpus 32
-load average 4.44 4.36 4.62  (a 1-minute figure near or above the core count means this run was contended)
+load average 3.21 4.63 3.13  (a 1-minute figure near or above the core count means this run was contended)
 single host, loopback: no network between client, gateway and Redis.
 

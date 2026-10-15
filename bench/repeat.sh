@@ -20,19 +20,29 @@ DURATION=${1:-20}; shift || true
 RATES=("$@"); [ ${#RATES[@]} -eq 0 ] && RATES=(250 500 1000 1500 2000 2500 3000)
 
 OUT=bench/results/repeat
-rm -rf "$OUT"; mkdir -p "$OUT"
+
+# Staged, then promoted. This used to `rm -rf "$OUT"` before the first sweep,
+# destroying the committed result set -- the one the new run exists to be
+# compared against -- a quarter of an hour before finding out whether the new
+# run would even complete, and a killed run then left neither. Sweeps collect
+# under .part and replace $OUT only once every repeat has finished and the
+# summary below has parsed all of them, which is how sweep.sh already handles a
+# single file. bench/results/*.part is gitignored, so a staged set cannot be
+# committed as though it were a finished one.
+STAGE="$OUT.part"
+rm -rf "$STAGE"; mkdir -p "$STAGE"
 
 for r in $(seq 1 "$REPEATS"); do
   echo "  sweep $r of $REPEATS ..."
   ./scripts/serve.sh restart >/dev/null 2>&1
   ./bench/sweep.sh "$DURATION" "${RATES[@]}" >/dev/null 2>&1
   for rate in "${RATES[@]}"; do
-    cp "bench/results/rate-$rate.txt" "$OUT/run$r-rate-$rate.txt"
+    cp "bench/results/rate-$rate.txt" "$STAGE/run$r-rate-$rate.txt"
   done
-  uptime >> "$OUT/load.txt"
+  uptime >> "$STAGE/load.txt"
 done
 
-python3 - "$OUT" "$REPEATS" "${RATES[@]}" <<'PY'
+python3 - "$STAGE" "$REPEATS" "${RATES[@]}" <<'PY'
 import re, sys, pathlib, statistics as st
 
 out, repeats, *rates = sys.argv[1], int(sys.argv[2]), *sys.argv[3:]
@@ -71,3 +81,8 @@ print('\n  p99 spread is max/min across sweeps. A figure near 1 means the number
 print('  a property of the service; a large one means it is a property of whatever')
 print('  else the machine was doing, and should not be quoted as a result.\n')
 PY
+
+# Every sweep finished and every file parsed. Only now does the previous set
+# get replaced.
+rm -rf "$OUT"
+mv "$STAGE" "$OUT"

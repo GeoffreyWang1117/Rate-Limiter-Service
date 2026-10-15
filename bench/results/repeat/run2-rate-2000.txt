@@ -10,15 +10,15 @@ reserve latency (ms) -- the phase that sits between a user and their first token
 
   offered rps  achieved rps      n   p50   p95   p99  p99.9    max  admitted  shed  errors
   -----------  ------------  -----  ----  ----  ----  -----  -----  --------  ----  ------
-         2000          2000  40001  0.61  0.89  1.48   5.42  10.76     40001     0       0
+         2000          2000  40001  0.62  0.89  1.42   5.67  14.74     40001     0       0
 
 commit latency (ms) -- off the critical path, after generation finishes
 
   offered rps      n   p50   p95   p99    max
   -----------  -----  ----  ----  ----  -----
-         2000  40001  0.56  0.83  1.38  11.29
+         2000  40001  0.55  0.85  1.35  14.34
 
 node v26.7.0  platform linux  cpus 32
-load average 4.23 4.85 4.87  (a 1-minute figure near or above the core count means this run was contended)
+load average 10.33 4.91 2.19  (a 1-minute figure near or above the core count means this run was contended)
 single host, loopback: no network between client, gateway and Redis.
 
