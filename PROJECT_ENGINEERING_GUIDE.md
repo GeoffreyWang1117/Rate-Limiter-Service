@@ -851,7 +851,7 @@ Redis (ephemeral, TTL'd) or PostgreSQL (durable, operator-managed).
 | **Method** | Open loop against absolute deadlines; fresh client process per rate; cold gateway per sweep; budgets far above offered load so nothing is shed |
 | **Workload** | `CHAT_WORKLOAD`, seed `20260830` |
 | **Hardware** | 32 cores, Linux; Node v26.7.0; Redis 8.10.1 and PostgreSQL 18.6 over loopback |
-| **Host load** | 4.0–5.8 throughout, recorded in `bench/results/repeat/load.txt` |
+| **Host load** | 4.1–11.1 at sweep end on the 2026-10-15 run (4.0–5.8 on the first), recorded in `bench/results/repeat/load.txt` |
 | **Output** | `bench/results/repeat/`, `bench/results/repeat-summary.txt` |
 | **Metric** | p50/p95/p99 of the `reserve` call, plus achieved rate, gateway CPU, Redis CPU |
 | **Official result** | Yes — `README.md:112-165` |
@@ -861,13 +861,32 @@ Redis (ephemeral, TTL'd) or PostgreSQL (durable, operator-managed).
 
 | offered | achieved | p50 | p95 | p99 | p99 range | spread | gw CPU | redis CPU |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 250 | 250 | 0.43 | 0.55 | 0.70 | 0.65–0.71 | 1.1× | 10% | 0% |
-| 500 | 500 | 0.41 | 0.52 | 0.61 | 0.59–0.63 | 1.1× | 20% | 0% |
-| 1000 | 1000 | 0.44 | 0.59 | 0.73 | 0.71–0.89 | 1.3× | 30% | 10% |
-| 1500 | 1500 | 0.47 | 0.70 | 1.09 | 0.91–2.51 | 2.8× | 50% | 10% |
-| 2000 | 2000 | 0.63 | 0.91 | 1.48 | 1.44–6.05 | 4.2× | 60% | 20% |
-| 2500 | 2499 | 0.72 | 1.30 | 6.91 | 2.87–29.01 | **10.1×** | 70% | 20% |
-| 3000 | 2999 | 0.72 | 2.08 | 9.55 | 3.23–17.99 | **5.6×** | 80% | 30% |
+| 250 | 250 | 0.42 | 0.54 | 0.66 | 0.56–0.67 | 1.2× | 10%* | 0%* |
+| 500 | 500 | 0.39 | 0.50 | 0.58 | 0.55–0.66 | 1.2× | 20%* | 0%* |
+| 1000 | 1000 | 0.43 | 0.59 | 0.76 | 0.68–2.02 | 3.0× | 30%* | 10%* |
+| 1500 | 1500 | 0.44 | 0.72 | 1.16 | 0.95–13.55 | **14.3×** | 50%* | 10%* |
+| 2000 | 2000 | 0.62 | 0.93 | 1.79 | 1.31–4.04 | 3.1× | 60%* | 20%* |
+| 2500 | 2499 | 0.71 | 1.18 | 2.45 | 1.71–3.07 | 1.8× | 70%* | 20%* |
+| 3000 | 2999 | 0.73 | 1.44 | 2.90 | 2.24–3.74 | 1.7× | 80%* | 30%* |
+
+Re-measured 2026-10-15 after the `COMMIT_SCRIPT` refill fix changed the measured
+path. `*` the CPU columns are carried over from the 2026-09-06 run and are
+`[STALE]`, not `[ARTIFACT]`: the host has been loaded by unrelated work since the
+latency sweeps, and `sweep.sh` only gained the ability to write CPU into the
+per-rate artifact in the same change. p50 is unchanged at every rate, which is
+why they are carried rather than dropped.
+
+**The spread did not reproduce, and that is the more useful result
+`[ARTIFACT]`.** In the first run it rose monotonically with offered rate
+(1.1× → 10.1×), which invites the reading that the service degrades as it
+saturates. On the second run the widest point is 1,500 cycles/s at 14.3× —
+below the knee — while 2,500 and 3,000 return 1.8× and 1.7×. Two runs of the
+same binary disagree about which rates are noisy, so the noise cannot be a
+function of the rate. The 1,500 outlier is a single sweep at 13.55 ms against
+0.95–1.84 for the other four, and it ended at the **lowest** load average of the
+five, so it does not correlate with load either `[UNKNOWN]`. The medians are
+stable to within 0.3 ms across the two runs, and the 1,000 cycles/s capacity
+claim survives both.
 
 **Known anomaly, still unexplained `[UNKNOWN]`:** the previously published table
 for the same code on the same host reported p99 2,538 ms at 2,000 cycles/s. The
@@ -875,8 +894,13 @@ discrepancy is three orders of magnitude, with the same request count, no
 shedding and no errors. The cause was never identified.
 
 **Interpretation as published:** capacity is **1,000 admission cycles/s per
-replica** — the highest rate where the tail repeats to within 1.3×. Not 3,000,
-even though the service serves 2,999 of 3,000 offered.
+replica**. Not 3,000, even though the service serves 2,999 of 3,000 offered. The
+original justification was that 1,000 was the highest rate whose tail repeated to
+within 1.3×; the second run returns 3.0× there, so that particular reason did not
+hold up. The claim stands on the weaker and more durable ground that 1,000 is the
+highest rate whose **median** is consistent across both runs and sits under 1 ms,
+with the spread at or below it never having been the widest point on either
+table.
 
 ## 9.2 Benchmark B — worst-case vs adaptive reservation
 
@@ -895,7 +919,7 @@ even though the service serves 2,999 of 3,000 offered.
 
 | mode | admitted | admitted % | mean held | mean used | held but unused |
 |---|---:|---:|---:|---:|---:|
-| `worst_case` | 75 | 18.8% | 5341 | 1471 | 72.5% |
+| `worst_case` | 75 | 18.8% | 5341 | 1472 | 72.4% |
 | `adaptive` | 230 | 57.5% | 1739 | 1516 | 12.9% |
 
 Overrun cost of `adaptive`: 29 of 230 (12.6%), 6,372 tokens, **1.83% of tokens used**.

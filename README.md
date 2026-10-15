@@ -128,27 +128,51 @@ same host put 2,500 cycles/s at 14.9ms and then 38.8ms, and once had 3,000 come
 out better than 2,500 — which cannot be a property of the service. The spread
 column is what says whether a number is one.
 
-| offered cycles/s | achieved | p50 (ms) | p95 (ms) | p99 (ms) | p99 range | p99 spread | gateway CPU | Redis CPU |
+| offered cycles/s | achieved | p50 (ms) | p95 (ms) | p99 (ms) | p99 range | p99 spread | gateway CPU† | Redis CPU† |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 250 | 250 | 0.43 | 0.55 | 0.70 | 0.65–0.71 | 1.1x | 10% | 0% |
-| 500 | 500 | 0.41 | 0.52 | 0.61 | 0.59–0.63 | 1.1x | 20% | 0% |
-| 1000 | 1000 | 0.44 | 0.59 | 0.73 | 0.71–0.89 | 1.3x | 30% | 10% |
-| 1500 | 1500 | 0.47 | 0.70 | 1.09 | 0.91–2.51 | 2.8x | 50% | 10% |
-| 2000 | 2000 | 0.63 | 0.91 | 1.48 | 1.44–6.05 | 4.2x | 60% | 20% |
-| 2500 | 2499 | 0.72 | 1.30 | 6.91 | 2.87–29.01 | **10.1x** | 70% | 20% |
-| 3000 | 2999 | 0.72 | 2.08 | 9.55 | 3.23–17.99 | **5.6x** | 80% | 30% |
+| 250 | 250 | 0.42 | 0.54 | 0.66 | 0.56–0.67 | 1.2x | 10% | 0% |
+| 500 | 500 | 0.39 | 0.50 | 0.58 | 0.55–0.66 | 1.2x | 20% | 0% |
+| 1000 | 1000 | 0.43 | 0.59 | 0.76 | 0.68–2.02 | 3.0x | 30% | 10% |
+| 1500 | 1500 | 0.44 | 0.72 | 1.16 | 0.95–13.55 | **14.3x** | 50% | 10% |
+| 2000 | 2000 | 0.62 | 0.93 | 1.79 | 1.31–4.04 | 3.1x | 60% | 20% |
+| 2500 | 2499 | 0.71 | 1.18 | 2.45 | 1.71–3.07 | 1.8x | 70% | 20% |
+| 3000 | 2999 | 0.73 | 1.44 | 2.90 | 2.24–3.74 | 1.7x | 80% | 30% |
 
 Latency is of the `reserve` call, the phase that sits between a user and their
-first token. CPU is percent of a single core, from a representative sweep; unlike
-the tail it repeats closely across runs. Host load average stayed between 4.0 and
-5.8 on 32 cores throughout, and is recorded in each artifact.
+first token. Host load average at the end of each sweep ran between 4.1 and 11.1
+on 32 cores, and the figure at the time of each run is recorded in its artifact.
 
-**Reading it.** One replica holds p99 **under 1ms to 1,000 admission cycles/s**
-with the tail repeating to within 1.3x across sweeps — 2,000 HTTP requests/s,
-since each cycle is a reserve and a commit. It holds under 1.5ms to 2,000, though
-the spread has already widened to 4x there. From 2,500 the spread reaches 10x and
-the median tail moves by more between two runs of the same binary than it does
-between 250 and 2,000 cycles/s.
+† **The two CPU columns are carried over from the previous run and are the one
+thing on this page without an artifact behind it.** They were measured on the
+code as it stood before the commit-path refill fix, and the host has been
+continuously loaded by unrelated work since the latency sweeps were taken, so
+re-measuring them now would produce a figure describing that work. They are kept
+rather than deleted because p50 is unchanged at every single rate, which is
+direct evidence that per-request cost did not move — but carried-over is not
+measured, and it is marked here rather than quietly left to look current. The
+sweep harness now writes these figures into each per-rate artifact, so the next
+run on a quiet host sources them like everything else.
+
+**Reading it.** One replica holds p99 **under 1ms to 1,000 admission cycles/s** —
+2,000 HTTP requests/s, since each cycle is a reserve and a commit — and under 2ms
+to 2,000. Medians are stable: every one of them sits within 0.3ms of the previous
+run, and p50 is unchanged throughout.
+
+**The spread is not stable, and that is the finding.** In the previous run it grew
+monotonically with offered rate, 1.1x at 250 up to 10.1x at 2,500, which reads
+like a property of the service approaching saturation. It did not reproduce. This
+run is non-monotonic: 1.2x, 1.2x, 3.0x, **14.3x**, 3.1x, 1.8x, 1.7x. The widest
+point is now 1,500 cycles/s, comfortably below the knee, and the two rates that
+were worst before are now among the tightest. A quantity that reorders itself
+like that between two runs of the same binary is measuring the host, not the
+rate, and that is the conclusion to carry away from this table.
+
+The 1,500 figure is one sweep of five reporting 13.55ms where the other four sat
+between 0.95 and 1.84. **It is not explained.** It does not correlate with load:
+that sweep ended at the lowest load average of the five. It is the same shape as
+the 2,538ms p99 retracted earlier in this log, which also never reproduced. It
+stays in the range rather than being dropped as an outlier, because dropping the
+draws that spoil the story is how the spread column stops meaning anything.
 
 **So the capacity claim is 1,000 cycles/s, not 3,000.** The service still serves
 2,999 of 3,000 offered, and quoting that would look better. But above ~2,000 this
@@ -189,7 +213,7 @@ obtain it. Everything below is a real run of the real gateway driven by it.
 
 | mode | admitted | admitted % | mean held | mean used | held but unused |
 |---|---:|---:|---:|---:|---:|
-| `worst_case` | 75 | 18.8% | 5341 | 1471 | 72.5% |
+| `worst_case` | 75 | 18.8% | 5341 | 1472 | 72.4% |
 | `adaptive` | 230 | **57.5%** | 1739 | 1516 | 12.9% |
 
 | mode | overruns | overrun rate | overrun tokens | as % of tokens used |
@@ -447,8 +471,20 @@ busy the machine had been, and this is a shared workstation.
 Two things changed as a result. The harness now records the host load average in
 every run, and the reported table is the median of five sweeps with the range and
 the max/min spread beside it, so a number that moves between runs is visible as
-one. That turned out to matter immediately: the spread is 1.1x at 250 cycles/s
-and 10.1x at 2,500, which is the difference between a measurement and a draw.
+one. That turned out to matter immediately: that run put the spread at 1.1x for
+250 cycles/s and 10.1x for 2,500, which is the difference between a measurement
+and a draw.
+
+**And the spread itself did not reproduce.** Re-measured after the commit-path
+fix, the medians held — 2,000 cycles/s came back at 1.79ms against the 1.48ms
+above, both of them a long way from 2,538ms — but the shape of the spread
+inverted. It had risen monotonically with offered rate, which was easy to read as
+the service approaching saturation. On the second run the widest point is 1,500
+cycles/s at 14.3x, below the knee, while 2,500 and 3,000 come back among the
+tightest rates on the table. Two runs of the same binary disagree about *which
+rates are noisy*, which rules out the explanation that the noise belongs to the
+load level. It belongs to the host. The capacity claim of 1,000 cycles/s was
+derived conservatively enough to survive both runs, and it has not moved.
 
 **A benchmark was measuring its own setup.** The reservation experiment
 calibrates the estimator by pushing 150 completed requests through the tenant

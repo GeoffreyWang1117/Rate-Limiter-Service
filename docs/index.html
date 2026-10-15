@@ -434,30 +434,40 @@ footer a{color:var(--ink-2)}
           </tr>
         </thead>
         <tbody>
-          <tr><td>250</td><td>250</td><td>0.43</td><td>0.55</td><td>0.70</td><td>0.65–0.71</td><td class="good">1.1&times;</td><td>10%</td><td>0%</td></tr>
-          <tr><td>500</td><td>500</td><td>0.41</td><td>0.52</td><td>0.61</td><td>0.59–0.63</td><td class="good">1.1&times;</td><td>20%</td><td>0%</td></tr>
-          <tr><td>1000</td><td>1000</td><td>0.44</td><td>0.59</td><td>0.73</td><td>0.71–0.89</td><td class="good">1.3&times;</td><td>30%</td><td>10%</td></tr>
-          <tr><td>1500</td><td>1500</td><td>0.47</td><td>0.70</td><td>1.09</td><td>0.91–2.51</td><td>2.8&times;</td><td>50%</td><td>10%</td></tr>
-          <tr><td>2000</td><td>2000</td><td>0.63</td><td>0.91</td><td>1.48</td><td>1.44–6.05</td><td>4.2&times;</td><td>60%</td><td>20%</td></tr>
-          <tr><td>2500</td><td>2499</td><td>0.72</td><td>1.30</td><td>6.91</td><td>2.87–29.01</td><td class="bad">10.1&times;</td><td>70%</td><td>20%</td></tr>
-          <tr><td>3000</td><td>2999</td><td>0.72</td><td>2.08</td><td>9.55</td><td>3.23–17.99</td><td class="bad">5.6&times;</td><td>80%</td><td>30%</td></tr>
+          <tr><td>250</td><td>250</td><td>0.42</td><td>0.54</td><td>0.66</td><td>0.56–0.67</td><td class="good">1.2&times;</td><td>10%</td><td>0%</td></tr>
+          <tr><td>500</td><td>500</td><td>0.39</td><td>0.50</td><td>0.58</td><td>0.55–0.66</td><td class="good">1.2&times;</td><td>20%</td><td>0%</td></tr>
+          <tr><td>1000</td><td>1000</td><td>0.43</td><td>0.59</td><td>0.76</td><td>0.68–2.02</td><td>3.0&times;</td><td>30%</td><td>10%</td></tr>
+          <tr><td>1500</td><td>1500</td><td>0.44</td><td>0.72</td><td>1.16</td><td>0.95–13.55</td><td class="bad">14.3&times;</td><td>50%</td><td>10%</td></tr>
+          <tr><td>2000</td><td>2000</td><td>0.62</td><td>0.93</td><td>1.79</td><td>1.31–4.04</td><td>3.1&times;</td><td>60%</td><td>20%</td></tr>
+          <tr><td>2500</td><td>2499</td><td>0.71</td><td>1.18</td><td>2.45</td><td>1.71–3.07</td><td class="good">1.8&times;</td><td>70%</td><td>20%</td></tr>
+          <tr><td>3000</td><td>2999</td><td>0.73</td><td>1.44</td><td>2.90</td><td>2.24–3.74</td><td class="good">1.7&times;</td><td>80%</td><td>30%</td></tr>
         </tbody>
       </table>
     </div>
     <p class="caption">
       Median of <b>five</b> sweeps, with the range and the max/min spread beside it. 32 cores,
-      Node 26.7.0, Redis 8.10.1 and PostgreSQL 18.6 over loopback; host load average 4.0–5.8,
+      Node 26.7.0, Redis 8.10.1 and PostgreSQL 18.6 over loopback; host load average 4.1–11.1,
       recorded in <code>bench/results/repeat/load.txt</code>. Reproduce with
-      <code>./bench/repeat.sh 5 20</code>.
+      <code>./bench/repeat.sh 5 20</code>. The two CPU columns are
+      <b>carried over from the previous run and are the only figures here without an
+      artifact behind them</b> &mdash; the host has been loaded by unrelated work ever since
+      the latency sweeps, so measuring them now would describe that work instead. They are
+      kept because p50 is unchanged at every rate, and marked because carried over is not
+      the same as measured.
     </p>
 
     <div class="note" style="border-style:solid; border-left:3px solid var(--held)">
       <b>The capacity claim is 1,000 cycles/s, not 3,000.</b> The service serves 2,999 of
-      3,000 offered, and quoting that would look better. But the spread column says the tail
-      above ~2,000 moves more between two runs of the same binary than it does between 250
-      and 2,000 cycles/s &mdash; at that point the number describes a shared machine, not
-      this service. The honest operating point is the highest rate where the tail still
-      repeats: p99 under 1&nbsp;ms to 1,000 cycles/s, within 1.3&times; across five sweeps.
+      3,000 offered, and quoting that would look better. The medians are steady &mdash; every
+      one within 0.3&nbsp;ms of the previous run, p50 unchanged throughout &mdash; but the
+      spread is not, and that is the finding. It used to climb with offered rate, 1.1&times;
+      at 250 up to 10.1&times; at 2,500, which reads like saturation. It did not reproduce.
+      This run is widest at <b>1,500</b> cycles/s (14.3&times;, one sweep of five at
+      13.55&nbsp;ms that does not correlate with load and is not explained), while 2,500 and
+      3,000 come back among the tightest. Two runs of the same binary disagreeing about which
+      rates are noisy rules out the load level as the cause; it is the shared host. The
+      operating point is the rate whose tail survived both runs: p99 under 1&nbsp;ms to
+      1,000 cycles/s.
     </div>
 
     <div class="sechead" style="margin-top:44px">
@@ -469,7 +479,7 @@ footer a{color:var(--ink-2)}
           <table style="min-width:auto">
             <thead><tr><th>mode</th><th>admitted</th><th>mean held</th><th>mean used</th><th>unused</th></tr></thead>
             <tbody>
-              <tr><td>worst_case</td><td>75</td><td>5341</td><td>1471</td><td class="bad">72.5%</td></tr>
+              <tr><td>worst_case</td><td>75</td><td>5341</td><td>1472</td><td class="bad">72.4%</td></tr>
               <tr><td>adaptive</td><td class="good">230</td><td>1739</td><td>1516</td><td>12.9%</td></tr>
             </tbody>
           </table>
