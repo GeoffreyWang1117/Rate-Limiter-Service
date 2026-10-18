@@ -1118,14 +1118,27 @@ without them `[PROBE — `docker compose config` errors by name]`.
 |---|---|---|---|---|
 | Node | **v26.7.0** | 22 | `node:22-alpine` | `>=20` |
 | TypeScript | **5.9.3** | from lockfile | from lockfile | `^5.3.3` |
-| Redis | **8.10.1** (conda-forge) | `redis:7-alpine` | `redis:7-alpine` | — |
-| PostgreSQL | **18.6** (conda-forge) | `postgres:16-alpine` | `postgres:16-alpine` | — |
+| Redis | **8.10.1** (conda-forge) | `redis:8-alpine` | `redis:8-alpine` | — |
+| PostgreSQL | **18.6** (conda-forge) | `postgres:18-alpine` | `postgres:18-alpine` | — |
 | OS | Linux 7.0.0-29-generic | ubuntu-latest | alpine | — |
 
-> **Provenance caveat `[CODE][INFERRED]`.** Every published number was measured
-> on Redis 8.10.1 and PostgreSQL 18.6 under Node 26.7.0. CI and the Docker image
-> run Redis 7 and PostgreSQL 16 under Node 22. The measured stack is **not** the
-> deployed stack, and nothing in the repository quantifies the difference.
+> **Provenance caveat `[CODE][INFERRED]`.** The datastore mismatch is closed:
+> CI and compose were pinned to Redis 7 and PostgreSQL 16 while every number was
+> measured on Redis 8 and PostgreSQL 18, so they now track the major versions
+> that were measured. The suite passes against Redis 8.10.1 and PostgreSQL 18.6
+> locally, which is evidence for the bump but not for the images: **Docker is
+> unusable on this host** (no passwordless sudo, user not in the `docker`
+> group), so the compose change is verified only by `docker compose config` and
+> by CI, which has no volumes. The PostgreSQL volume is the risk there, because
+> the official image's default `PGDATA` has moved between majors and a volume at
+> a path the server no longer initialises comes up empty rather than failing;
+> compose now pins `PGDATA` explicitly so the mount does not depend on the tag.
+>
+> **Node remains deliberately different**: measured on v26.7.0, shipped on 22.
+> That is the active LTS, and shipping a service on an LTS while measuring on
+> whatever the workstation has is a defensible choice rather than an oversight —
+> but it is still unquantified, so a latency figure from this repository is a
+> figure from Node 26.
 
 ## 12.2 Runtime dependencies
 
@@ -2052,8 +2065,11 @@ bench/logging-ab.sh  (SLOW_REQUEST_LOG_MS=0 vs 250, same binary, back to back)
 6. **What is the intended deployment target?** No Kubernetes manifests, no
    Terraform, no cloud references. The Docker compose stack is a local
    development convenience, not a deployment `[INFERRED]`.
-7. **Why do CI and Docker pin Redis 7 / PostgreSQL 16 while every measurement was
-   taken on Redis 8 / PostgreSQL 18?** No commit or comment explains the choice.
+7. ~~**Why do CI and Docker pin Redis 7 / PostgreSQL 16 while every measurement
+   was taken on Redis 8 / PostgreSQL 18?**~~ Closed by alignment rather than by
+   an answer: no commit or comment ever explained the choice, so the versions
+   were moved to match what was measured. Node stays on 22 (LTS) by intent, and
+   that intent is now written down.
 
 ---
 
