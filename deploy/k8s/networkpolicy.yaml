@@ -1,0 +1,101 @@
+# The data plane is unauthenticated by design: POST /api/v1/llm/reserve takes no
+# credential, because an inference gateway calling it on every request cannot
+# afford a second round trip and the thing being protected is capacity, not
+# data. README and SECURITY.md both record that as accepted risk.
+#
+# "Accepted" is only honest if something bounds who can reach it. Nothing in
+# this repository ever did -- no network policy, no mesh, no statement of what
+# the boundary was supposed to be, which the engineering guide carried as an
+# open question. These policies are that boundary, and they are not optional
+# hardening: without them any pod in the cluster can spend any tenant's budget.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: llm-admission
+spec:
+  # Deny first, then allow back. Written as a separate object rather than as
+  # the absence of a rule so that deleting one of the allow policies below
+  # fails closed.
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-ingress
+  namespace: llm-admission
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: llm-admission-gateway
+  policyTypes: [Ingress]
+  ingress:
+    # Callers opt in by labelling their namespace. A label rather than a CIDR
+    # because pod addresses are not stable, and an explicit opt-in because the
+    # alternative -- allowing the whole cluster -- is what makes an
+    # unauthenticated endpoint indefensible.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              llm-admission.io/client: "true"
+      ports:
+        - port: 3000
+          protocol: TCP
+    # Metrics. Same port, because the image deliberately serves /metrics on the
+    # main listener rather than a second one, so this cannot be narrowed by
+    # port; it is narrowed by source instead.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 3000
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-egress
+  namespace: llm-admission
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: llm-admission-gateway
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis-cluster
+      ports:
+        - port: 6379
+          protocol: TCP
+        # Cluster bus. Clients do not use it, but a client that cannot resolve
+        # the topology behaves like one talking to a broken cluster, and the
+        # resulting error is not obviously a firewall.
+        - port: 16379
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - port: 5432
+          protocol: TCP
+  # No general internet egress. The gateway talks to Redis, PostgreSQL and DNS;
+  # it never calls the model provider, because admission decides before
+  # generation starts and the caller dispatches.

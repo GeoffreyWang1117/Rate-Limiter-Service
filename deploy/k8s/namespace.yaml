@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llm-admission
+  labels:
+    app.kubernetes.io/name: llm-admission-gateway
+    # Baseline would be enough for this workload; restricted is what it actually
+    # needs, and the Dockerfile already satisfies it (non-root UID, no added
+    # capabilities). Declaring the stricter level means a future change that
+    # quietly needs root is rejected by the API server rather than deployed.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest

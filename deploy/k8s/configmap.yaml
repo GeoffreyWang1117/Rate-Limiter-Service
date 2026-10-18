@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-config
+  namespace: llm-admission
+data:
+  NODE_ENV: production
+  PORT: "3000"
+  HOST: 0.0.0.0
+  LOG_LEVEL: info
+
+  # Admission refuses traffic it cannot account for. The generic HTTP limiter
+  # fails open, because a limiter that 500s during a Redis blip has made itself
+  # a hard dependency of everything behind it; admission fails closed, because
+  # an unmetered flood into a GPU fleet costs far more than the requests it
+  # drops. See README, "Two failure modes".
+  FAILURE_MODE: fail_open
+  ADMISSION_FAILURE_MODE: fail_closed
+
+  # Seeds only; the rest of the topology is discovered. Three are listed so that
+  # one being down at the moment a pod boots is survivable.
+  REDIS_CLUSTER_NODES: redis-cluster-0.redis-cluster:6379,redis-cluster-1.redis-cluster:6379,redis-cluster-2.redis-cluster:6379
+
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: rate_limiter
+
+  MAX_BODY_SIZE: 64kb
+  # Unset means no cross-origin access, not all of it.
+  CORS_ORIGIN: ""

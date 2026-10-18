@@ -308,6 +308,33 @@ Migrations run as a one-shot job that must succeed before the gateway starts,
 rather than from inside the app — otherwise every replica races to apply the same
 DDL on each rollout.
 
+### On a Redis Cluster
+
+```bash
+./scripts/cluster.sh up                 # 3 masters + 3 replicas, no Docker, no sudo
+./scripts/cluster.sh slots acme gpt-4   # where each key of one pair lands
+npm run test:cluster                    # admission across three shards
+```
+
+The admission keys carry a hash tag — `llm:{tenant|model}:tpm`, `:leases`,
+`:res` — so every key one decision touches hashes to a single slot. That is not
+a performance detail: a Lua script whose keys span slots is *refused* with
+CROSSSLOT, so on a cluster the layout is either right or the service does not
+work. One of the tests pins that counterfactual, because without it the others
+would pass equally well on a layout that had quietly lost its tag.
+
+### On Kubernetes
+
+`deploy/k8s/` holds nine objects — Deployment, Service, HPA, PDB, ConfigMap,
+Namespace and three NetworkPolicies. `python3 scripts/validate-k8s.py` checks
+them against the upstream *strict* schemas, which reject unknown fields, and CI
+runs it. **No cluster has ever applied them**, so that is schema validity and
+not a deployment test; [deploy/k8s/README.md](deploy/k8s/README.md) opens by
+saying so, and explains the decisions that are not obvious — no CPU limit on a
+single-threaded server, an HPA threshold read off the benchmark, and why the
+NetworkPolicies are load-bearing rather than hardening for a data plane that is
+unauthenticated by design.
+
 ### Walk the protocol
 
 ```bash

@@ -1,0 +1,14 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gateway
+  namespace: llm-admission
+spec:
+  # minAvailable rather than maxUnavailable, so the budget keeps meaning the
+  # same thing while the HPA changes the replica count underneath it. Two is
+  # the floor at which the shared budget in Redis is still being enforced by
+  # more than one process during a node drain.
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llm-admission-gateway

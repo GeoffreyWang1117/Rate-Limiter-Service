@@ -1,0 +1,45 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: gateway
+  namespace: llm-admission
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: gateway
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # 60% of the one-core request. Read off the benchmark rather than
+          # chosen as a round number: measured gateway CPU is ~30% of a core at
+          # 1,000 admission cycles/s, which is the published capacity of a
+          # single replica, and ~60% at 2,000, where the tail has already begun
+          # to widen. Scaling out at 60% therefore adds a replica at roughly the
+          # load where one replica stops being comfortable, leaving the rest of
+          # the core as headroom for the burst that arrives during the ~15s it
+          # takes the new pod to pass its startup probe.
+          averageUtilization: 60
+  behavior:
+    scaleUp:
+      # Admission traffic arrives in bursts by nature -- that is the workload
+      # this service exists for -- so scaling up is allowed to be abrupt.
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+    scaleDown:
+      # Slow, and deliberately asymmetric with scale-up. Removing a replica
+      # during a lull that turns out to be the gap between two bursts costs a
+      # cold start on the next one.
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60

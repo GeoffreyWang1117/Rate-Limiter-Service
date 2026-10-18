@@ -72,7 +72,7 @@ path, not in it: a gateway calls `reserve` before dispatching to a model and
 | 103 tests across 10 suites against real Redis and real PostgreSQL, 81.6% statements | `[TEST]` |
 | Benchmarked with committed raw artifacts and a repeat-with-spread harness | `[ARTIFACT: bench/results/]` |
 | Security-audited; 11 confirmed findings fixed | `[GIT: 84c723b, d681d67]`, `[DOC: SECURITY.md]` |
-| Has never run outside one workstation and CI | `[INFERRED]` — no deployment manifests, no infra-as-code, no staging references |
+| Has never run outside one workstation and CI | `[INFERRED]` — `deploy/k8s/` now exists and is schema-validated in CI, but no cluster has applied it |
 | Redis Cluster runs, and is tested across three shards | `[TEST: src/__tests__/llm/cluster.test.ts]` — cluster client, `./scripts/cluster.sh`; **not** benchmarked |
 | The three defects this audit found are closed, each with a test that fails against the old code | `[TEST]` — see §17 |
 | Published as a GitHub Pages demo with an interactive protocol simulator | `docs/index.html` |
@@ -1694,7 +1694,7 @@ choice that cannot surprise anyone."
 **Rationale as recorded:** it is called by internal services on every request and
 belongs behind network policy and mTLS at the mesh rather than behind a shared
 secret in a header.
-**Not recorded:** whether any mesh or network policy was ever specified. `[UNKNOWN]`
+**Now specified:** `deploy/k8s/networkpolicy.yaml` — default-deny in the namespace, ingress only from namespaces labelled `llm-admission.io/client=true` plus the monitoring namespace, egress only to DNS, Redis and PostgreSQL. No mesh and no mTLS; the boundary is the network policy alone `[CODE]`, and it has never been applied to a cluster.
 
 ### Why `now` comes from the gateway rather than Redis
 
@@ -2054,16 +2054,21 @@ bench/logging-ab.sh  (SLOW_REQUEST_LOG_MS=0 vs 250, same binary, back to back)
 2. **Were the two branches (`tokengate` and this one) meant to be reconciled?**
    Neither references the other. Should the archived OpenAI adapter, tokenizer
    and deployment configs be brought forward?
-3. **Was any network policy or mesh mTLS ever specified for the unauthenticated
-   data plane?** `SECURITY.md` says it "belongs behind network policy" but names
-   none.
+3. ~~**Was any network policy or mesh mTLS ever specified for the
+   unauthenticated data plane?**~~ Nothing was, which was the answer. One is now
+   written: `deploy/k8s/networkpolicy.yaml`, default-deny with an explicit
+   opt-in label for callers. Still no mesh and no mTLS, so the boundary is the
+   policy alone — and it is schema-valid rather than deployed.
 4. **Is the generic HTTP limiter in scope?** It is fully working and tested but
    orthogonal to the project's thesis. Keeping it costs maintenance; removing it
    deletes ~1,000 lines and 30 tests.
 5. **Should `now` come from Redis rather than the gateway?** The clock-skew
    assumption is undocumented.
-6. **What is the intended deployment target?** No Kubernetes manifests, no
-   Terraform, no cloud references. The Docker compose stack is a local
+6. **What is the intended deployment target?** Partly answered by being
+   chosen: `deploy/k8s/` is Kubernetes, nine objects validated against the
+   upstream strict schemas in CI. Still no infrastructure-as-code, no cloud
+   references, no Redis or PostgreSQL manifests (an operator's job), and **no
+   cluster has ever applied any of it**. The compose stack remains a local
    development convenience, not a deployment `[INFERRED]`.
 7. ~~**Why do CI and Docker pin Redis 7 / PostgreSQL 16 while every measurement
    was taken on Redis 8 / PostgreSQL 18?**~~ Closed by alignment rather than by

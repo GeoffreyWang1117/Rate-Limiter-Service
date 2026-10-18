@@ -1,0 +1,150 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: llm-admission
+  labels:
+    app.kubernetes.io/name: llm-admission-gateway
+    app.kubernetes.io/component: gateway
+spec:
+  # Three is the floor the PodDisruptionBudget is written against, not a
+  # capacity figure. Capacity comes from the HPA, because Node serves HTTP on
+  # one thread and the measured gateway CPU rises linearly with offered rate --
+  # a bigger machine does not help, another replica does.
+  replicas: 3
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llm-admission-gateway
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: llm-admission-gateway
+        app.kubernetes.io/component: gateway
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: /metrics
+    spec:
+      # 35s against the application's own 30s forced-shutdown backstop, so the
+      # process always gets to log why it gave up before the kubelet SIGKILLs
+      # it. Inverting these two numbers is how a graceful shutdown path becomes
+      # untestable in production: the evidence is killed before it is written.
+      terminationGracePeriodSeconds: 35
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        # Spread before anything else. Three replicas on one node share a
+        # failure domain and the PDB below would still report the service as
+        # healthy while a single node drain took all of it out.
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: llm-admission-gateway
+      containers:
+        - name: gateway
+          image: ghcr.io/geoffreywang1117/llm-admission-gateway:3.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: gateway-config
+          env:
+            # Not in the ConfigMap, and not in a committed manifest either.
+            # See deploy/k8s/README.md for the kubectl command that creates it.
+            - name: CONTROL_PLANE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-secrets
+                  key: control-plane-api-key
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-secrets
+                  key: postgres-user
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-secrets
+                  key: postgres-password
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-secrets
+                  key: redis-password
+          resources:
+            requests:
+              # A full core, because the event loop is one thread and a replica
+              # that cannot get a whole core cannot reach the rate this one is
+              # sized for.
+              cpu: "1"
+              memory: 192Mi
+            limits:
+              # Memory is limited and CPU deliberately is not. A CFS quota on a
+              # single-threaded latency-sensitive server produces throttling
+              # that lands entirely in the tail -- the exact quantity this
+              # service publishes and is judged on. Protection against a noisy
+              # replica comes from the request plus the HPA, which scales out
+              # before saturation rather than capping a pod into it.
+              memory: 192Mi
+          livenessProbe:
+            # Checks nothing external on purpose: a liveness probe that fails on
+            # a Redis outage makes the orchestrator restart every healthy
+            # replica in the middle of that outage.
+            httpGet: { path: /health/live, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            # This one does check Redis: a replica that cannot reach it cannot
+            # decide anything, and should leave the load balancer rotation
+            # without being restarted.
+            httpGet: { path: /health/ready, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          startupProbe:
+            # Boot loads every Lua script into the Redis script cache before
+            # listening, so that the first request after a deploy does not pay
+            # to ship a script body. That work happens before the port opens,
+            # which is why startup gets its own budget instead of a liveness
+            # initialDelay.
+            httpGet: { path: /health/live, port: http }
+            periodSeconds: 2
+            failureThreshold: 30
+          lifecycle:
+            preStop:
+              exec:
+                # Endpoint removal and SIGTERM race: the kubelet signals the
+                # container while kube-proxy and the ingress are still being
+                # told this pod is gone. Without this pause the process stops
+                # accepting while traffic is still arriving, and a rollout
+                # shows up as a handful of connection resets.
+                command: ["sleep", "5"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # readOnlyRootFilesystem leaves nowhere to write; Node wants a usable
+        # /tmp. An emptyDir rather than a host path, so it dies with the pod.
+        - name: tmp
+          emptyDir: {}

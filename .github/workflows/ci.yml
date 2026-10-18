@@ -108,3 +108,18 @@ jobs:
       # The image build compiles TypeScript, so a type error fails here too --
       # which is what the original Dockerfile would have done, had anyone built it.
       - run: docker build -t rate-limiter-gateway:ci .
+
+  # The deployment manifests are the one part of the repository with no cluster
+  # behind them. The strict schemas reject unknown fields, so a misspelled key
+  # -- which the API server silently drops rather than refusing -- fails here
+  # instead of in production. This is schema validity, not a deployment test;
+  # deploy/k8s/README.md says so in its first paragraph.
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install --quiet pyyaml jsonschema
+      - run: python3 scripts/validate-k8s.py
