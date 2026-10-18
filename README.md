@@ -1,9 +1,5 @@
 # LLM Admission Gateway
 
-> 📋 **改进方案**: 本仓有一份经过实查的改进方案 —— [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md)（2026-10-13）。
-> 跨项目索引（仓库外，本机）: `~/Engineering/ENGINEERING_IMPROVEMENT_INDEX_2026-10-13.md`
-
-
 Token-aware admission control for LLM inference, on Redis and PostgreSQL.
 
 A conventional API rate limiter charges every request one unit and decides once,
