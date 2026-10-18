@@ -565,7 +565,7 @@ footer a{color:var(--ink-2)}
       <li><b>One process, one core.</b> Capacity comes from replicas; the gateway is stateless and every decision is one atomic script.</li>
       <li><b>No production trace.</b> Output lengths are drawn from an assumed distribution, which is why the reservation result is a sweep rather than a number.</li>
       <li><b>No LLM is behind the gateway in any benchmark.</b> Admission decides before generation starts; the measurements cover the decision and the accounting, not end-to-end serving.</li>
-      <li><b>Redis Cluster has never been deployed.</b> Keys carry hash tags so multi-key scripts stay in one slot, but that is a claim about key layout, not a tested deployment.</li>
+      <li><b>Redis Cluster is tested, but every published number is single-node.</b> A six-node cluster (three masters, three replicas) runs the admission protocol across three shards in CI-skippable integration tests &mdash; including the counterfactual, that an untagged multi-key script is refused with CROSSSLOT. No benchmark has been run against it, so the latency tables above do not include a routing hop.</li>
       <li><b>Defects are recorded before they are fixed</b>, with a reproduction each. The three found by the last audit &mdash; a missing refill on the commit path, a duplicate-policy 500 that the docs promised as a 409, and an unreachable branch implying a disabled policy turned admission off &mdash; are now closed, each with a test that fails against the old code.</li>
     </ul>
   </section>

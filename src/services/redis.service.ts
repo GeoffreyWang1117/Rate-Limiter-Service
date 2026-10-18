@@ -1,36 +1,73 @@
-import Redis from 'ioredis';
+import Redis, { Cluster } from 'ioredis';
 import config from '../config';
 import logger from '../utils/logger';
 import { RedisConnectionError } from '../utils/errors';
 
+/**
+ * Either client shape. Every command this service issues exists on both, and
+ * the admission keys are hash-tagged so that each multi-key script stays inside
+ * one slot -- which is what makes a cluster usable here at all, since a
+ * cross-slot script is refused outright rather than merely being slow.
+ */
+export type RedisLike = Redis | Cluster;
+
 class RedisService {
-  private client: Redis | null = null;
+  private client: RedisLike | null = null;
   private isConnected = false;
 
-  async connect(): Promise<Redis> {
+  /** True when the configured client is a cluster client. */
+  isCluster(): boolean {
+    return this.client instanceof Cluster;
+  }
+
+  async connect(): Promise<RedisLike> {
     if (this.client && this.isConnected) {
       return this.client;
     }
 
+    const retryStrategy = (times: number): number | null => {
+      if (times > config.redis.maxRetries) {
+        logger.error('Redis max retries exceeded');
+        return null;
+      }
+      const delay = Math.min(times * config.redis.retryDelay, 3000);
+      logger.warn(`Redis reconnecting in ${delay}ms (attempt ${times})`);
+      return delay;
+    };
+
     try {
-      this.client = new Redis({
-        host: config.redis.host,
-        port: config.redis.port,
-        password: config.redis.password,
-        db: config.redis.db,
-        retryStrategy: (times) => {
-          if (times > config.redis.maxRetries) {
-            logger.error('Redis max retries exceeded');
-            return null;
-          }
-          const delay = Math.min(times * config.redis.retryDelay, 3000);
-          logger.warn(`Redis reconnecting in ${delay}ms (attempt ${times})`);
-          return delay;
-        },
-        maxRetriesPerRequest: 3,
-        enableReadyCheck: true,
-        lazyConnect: false,
-      });
+      const seeds = config.redis.clusterNodes;
+      this.client = seeds.length
+        ? new Cluster(seeds, {
+            // Reads go to masters. A replica can lag, and a budget read from a
+            // stale replica would admit against tokens that are already spent --
+            // the one error this service exists to prevent.
+            scaleReads: 'master',
+            redisOptions: {
+              password: config.redis.password,
+              // No `db`: cluster mode has only database 0, and passing one is
+              // an error rather than a no-op.
+              maxRetriesPerRequest: 3,
+            },
+            clusterRetryStrategy: retryStrategy,
+            enableReadyCheck: true,
+          })
+        : new Redis({
+            host: config.redis.host,
+            port: config.redis.port,
+            password: config.redis.password,
+            db: config.redis.db,
+            retryStrategy,
+            maxRetriesPerRequest: 3,
+            enableReadyCheck: true,
+            lazyConnect: false,
+          });
+
+      if (seeds.length) {
+        logger.info('Redis cluster client configured', {
+          seeds: seeds.map((n) => `${n.host}:${n.port}`).join(','),
+        });
+      }
 
       this.client.on('connect', () => {
         logger.info('Redis client connected');
@@ -65,11 +102,22 @@ class RedisService {
     }
   }
 
-  getClient(): Redis {
+  getClient(): RedisLike {
     if (!this.client || !this.isConnected) {
       throw new RedisConnectionError('Redis client not connected');
     }
     return this.client;
+  }
+
+  /**
+   * Every master, for commands that are per-node rather than per-key.
+   * `SCRIPT LOAD` is the one that matters: a cluster client sends it to a
+   * single node, so pre-warming through it leaves the other masters without
+   * the script. On a standalone client this is the client itself.
+   */
+  masters(): RedisLike[] {
+    const client = this.getClient();
+    return client instanceof Cluster ? client.nodes('master') : [client];
   }
 
   async disconnect(): Promise<void> {

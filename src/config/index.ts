@@ -3,6 +3,32 @@ import { RateLimiterConfig, RateLimitAlgorithm } from '../types';
 
 dotenv.config();
 
+/**
+ * `host:port,host:port` into seed nodes. Seeds only: ioredis discovers the rest
+ * of the topology from any node that answers, so this list does not have to be
+ * complete or current, and listing two or three is about surviving one of them
+ * being down at the moment the gateway boots.
+ *
+ * Malformed entries throw rather than being skipped. A typo in one seed would
+ * otherwise leave a shorter list that still works, until the day it is the only
+ * one left.
+ */
+function parseClusterNodes(raw?: string): Array<{ host: string; port: number }> {
+  if (!raw || raw.trim() === '') return [];
+  return raw.split(',').map((entry) => {
+    const text = entry.trim();
+    const sep = text.lastIndexOf(':');
+    const host = sep === -1 ? '' : text.slice(0, sep);
+    const port = sep === -1 ? NaN : Number(text.slice(sep + 1));
+    if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new Error(
+        `REDIS_CLUSTER_NODES: "${text}" is not host:port with a valid port`
+      );
+    }
+    return { host, port };
+  });
+}
+
 const config: RateLimiterConfig = {
   redis: {
     host: process.env.REDIS_HOST || 'localhost',
@@ -11,6 +37,7 @@ const config: RateLimiterConfig = {
     db: parseInt(process.env.REDIS_DB || '0', 10),
     maxRetries: parseInt(process.env.REDIS_MAX_RETRIES || '3', 10),
     retryDelay: parseInt(process.env.REDIS_RETRY_DELAY || '100', 10),
+    clusterNodes: parseClusterNodes(process.env.REDIS_CLUSTER_NODES),
   },
   postgres: {
     host: process.env.POSTGRES_HOST || 'localhost',

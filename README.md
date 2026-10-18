@@ -384,6 +384,7 @@ Full request and response shapes: [API.md](API.md).
 | `ADMISSION_FAILURE_MODE` | `fail_closed` | LLM admission when Redis is unreachable |
 | `COMMIT_IDEMPOTENCY_TTL` | `300` | How long a settled reservation is remembered |
 | `SLOW_REQUEST_LOG_MS` | `250` | Above this, a request gets its own log line |
+| `REDIS_CLUSTER_NODES` | unset | Seed nodes `host:port,…` for Redis Cluster. Unset means single-node |
 | `MAX_BODY_SIZE` | `64kb` | Largest accepted request body; parsed on the thread that serves every other request |
 | `CORS_ORIGIN` | unset | Comma-separated origins. Unset means no cross-origin access, not all of it |
 
@@ -624,8 +625,12 @@ body is a few hundred bytes. `SECURITY.md` has the reproductions.
 - **Adaptive reservation tracks one EWMA per model**, not per prompt shape. A
   tenant whose traffic mixes short chat and long summarisation gets an estimate
   between the two. Per-route or per-prompt-length estimators would tighten it.
-- **No Redis Cluster deployment has been tested.** Keys carry hash tags so every
-  multi-key script stays within one slot, but only single-node Redis has been run.
+- **Redis Cluster is supported and tested, but not benchmarked.** A six-node
+  cluster (three masters, three replicas) is started by `./scripts/cluster.sh up`
+  and `npm run test:cluster` runs the admission protocol across three shards
+  against it. What has not been done is measuring it: every number in the
+  benchmark tables above comes from single-node Redis, and a cluster adds a
+  routing hop that those figures do not include.
 - **`sloTtftMs` is enforced against a predicted wait**, derived from an EWMA of
   observed service time and current queue depth. It is a queueing estimate, not a
   guarantee.

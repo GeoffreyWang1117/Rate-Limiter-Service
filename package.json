@@ -25,7 +25,8 @@
     "bench:sweep": "./bench/sweep.sh",
     "docker:up": "docker compose up -d --build",
     "docker:down": "docker compose down",
-    "bench:reservation:sweep": "bash bench/sweep-reservation.sh"
+    "bench:reservation:sweep": "bash bench/sweep-reservation.sh",
+    "test:cluster": "REDIS_CLUSTER_NODES=${REDIS_CLUSTER_NODES:-127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003} jest src/__tests__/llm/cluster.test.ts"
   },
   "keywords": [
     "llm",

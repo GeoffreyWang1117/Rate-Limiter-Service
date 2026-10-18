@@ -115,10 +115,14 @@ simplicity, and a t-digest in Redis would be the principled replacement.
 
 ## What is not here
 
-**Redis Cluster.** Keys carry hash tags (`llm:{tenant|model}:...`) so every
-multi-key script stays within one slot, which is the design constraint that
-matters. But only single-node Redis has been run, so cluster support is a claim
-about the key layout, not a tested deployment.
+**A cluster benchmark.** Redis Cluster itself is no longer absent: hash tags
+(`llm:{tenant|model}:...`) keep every multi-key script inside one slot, and that
+is now exercised against a real six-node cluster rather than asserted -- see
+`npm run test:cluster`, which also pins the counterfactual, that an untagged
+multi-key script is refused with CROSSSLOT rather than merely running slower.
+What is missing is performance: every published number was measured on
+single-node Redis, and a cluster inserts a routing hop none of them account
+for.
 
 **Streaming-aware admission.** Output tokens arrive over seconds. A gateway that
 saw the stream could reconcile incrementally rather than in one commit at the end,

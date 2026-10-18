@@ -73,7 +73,7 @@ path, not in it: a gateway calls `reserve` before dispatching to a model and
 | Benchmarked with committed raw artifacts and a repeat-with-spread harness | `[ARTIFACT: bench/results/]` |
 | Security-audited; 11 confirmed findings fixed | `[GIT: 84c723b, d681d67]`, `[DOC: SECURITY.md]` |
 | Has never run outside one workstation and CI | `[INFERRED]` — no deployment manifests, no infra-as-code, no staging references |
-| Redis Cluster support is a key-layout claim, never exercised | `[DOC: docs/DESIGN.md]`, `[CODE]` — hash tags present, no cluster client |
+| Redis Cluster runs, and is tested across three shards | `[TEST: src/__tests__/llm/cluster.test.ts]` — cluster client, `./scripts/cluster.sh`; **not** benchmarked |
 | The three defects this audit found are closed, each with a test that fails against the old code | `[TEST]` — see §17 |
 | Published as a GitHub Pages demo with an interactive protocol simulator | `docs/index.html` |
 
@@ -113,7 +113,7 @@ Real, exercised, and covered by tests:
 | Single-threaded; capacity comes from replicas, not cores | `[ARTIFACT]` gateway CPU tracks offered load linearly to ~80% of one core |
 | Measured tail is only reproducible below ~1,000 admission cycles/s **on the audit host** | `[ARTIFACT: bench/results/repeat-summary.txt]` |
 | No production trace; the reservation result's magnitude depends on an assumed output-length distribution | `[CODE: bench/lib/workload.ts:14-15][DOC]` |
-| Redis Cluster never deployed | `[DOC: docs/DESIGN.md]` |
+| Redis Cluster deployed and tested, never benchmarked | `[TEST]`, `[CODE: scripts/cluster.sh]` |
 | No streaming-aware reconciliation; one commit at the end | `[DOC: docs/DESIGN.md]` |
 | No priority classes; batch and interactive contend identically | `[DOC: docs/DESIGN.md]` |
 | One EWMA per (tenant, model), not per prompt shape | `[CODE: src/llm/admission-scripts.ts:217-224]` |
@@ -614,7 +614,7 @@ whose artifact is not in the repository is a claim the reader must take on trust
 - `src/index.ts` — excluded from coverage; exercised by the CI smoke job only
 - `src/scripts/migrate.ts` — excluded; exercised by CI running it
 - **The commit-path refill behaviour** — §17.1 exists precisely because nothing asserts it
-- Redis Cluster key routing — no cluster is ever started
+- Redis Cluster key routing — closed: `./scripts/cluster.sh up` starts six nodes and `npm run test:cluster` runs admission across three shards
 - Graceful shutdown ordering — no test sends SIGTERM
 
 ---
@@ -1104,7 +1104,8 @@ without them `[PROBE — `docker compose config` errors by name]`.
 |---|---|
 | The archived branch's results | Its `LOAD_RESULTS.md` was produced against an in-process mock provider that only exists in the bundle |
 | The retracted p99 2,538 ms figure | Never reproduced; cause unknown |
-| Anything on Redis Cluster | Never deployed `Unverified` |
+| Admission protocol on Redis Cluster | Six-node cluster, three shards `[TEST]` |
+| Cluster *performance* | Never measured `Unverified` |
 | The Docker path on the audit host | The Docker daemon required privileges the auditor did not hold. Compose findings were confirmed by running the app with the exact environment the compose file produces `[DOC: SECURITY.md]` |
 
 ---
@@ -1195,7 +1196,7 @@ hop to Redis that will dominate the sub-millisecond p50 reported here `[DOC]`.
 | N replicas cannot over-admit by N | Refill, compare, deduct, lease and expiry sweep are one Lua script; Redis runs scripts to completion `[CODE][DOC: docs/DESIGN.md]` |
 | Expiry cannot double-credit a concurrent commit | The sweep runs *inside* the admit script, so no commit can interleave with it `[CODE: admission-scripts.ts:50-64]` |
 | A retried commit cannot double-charge | Per-reservation `settled` marker checked first `[CODE:175-179][TEST]` |
-| Cluster-safety of multi-key scripts | Hash tag `llm:{tenant\|model}` puts every key for one pair in one slot `[CODE]` — **untested** |
+| Cluster-safety of multi-key scripts | Hash tag `llm:{tenant\|model}` puts every key for one pair in one slot `[TEST]` — and the counterfactual is pinned: an untagged pair is refused with CROSSSLOT |
 
 ## 14.3 Hidden assumptions
 
@@ -1701,7 +1702,7 @@ Recovered from assertions, tests, script structure and documentation.
 | 2 | Refill, compare, deduct and lease happen atomically | One Lua script; Redis runs scripts to completion `[CODE]` |
 | 3 | Expiry cannot interleave with a concurrent commit | The sweep runs inside `ADMIT_SCRIPT` `[CODE]` |
 | 4 | Budget key TTL > longest possible lease | `ttlSeconds = max(120, leaseSeconds*2 + 60)` `[CODE]` |
-| 5 | Every key for one `(tenant, model)` lives in one Redis Cluster slot | Hash tag `llm:{t\|m}` `[CODE]` — **untested** |
+| 5 | Every key for one `(tenant, model)` lives in one Redis Cluster slot | Hash tag `llm:{t\|m}` `[TEST: cluster.test.ts]` — verified on a six-node cluster |
 | 6 | `RedisScript.run` receives exactly `numKeys` keys | Explicit throw `[CODE: script-runner.ts:32]` |
 | 7 | Balances are persisted on both the admit and the shed path | `SET` calls sit outside the branch `[CODE: admission-scripts.ts:118-125]` |
 | 8 | `PolicyResolver.resolve()` always returns a policy | Fallback to `DEFAULT_POLICY` `[CODE]` |
@@ -1786,7 +1787,7 @@ in §24.
 
 | Item | Why |
 |---|---|
-| Redis Cluster support | Hash tags are in place; no cluster has been run |
+| Redis Cluster performance | The protocol is tested on a cluster; no benchmark has been run against one |
 | `adaptive` reservation in production | Measured only against a synthetic distribution |
 | `sloTtftMs` shedding | Correct against the predictor; the predictor itself is an EWMA that degrades to a constant if callers omit `serviceMs` |
 | The Docker path | `docker build` runs in CI; `docker compose up` has never been executed on the audit host |

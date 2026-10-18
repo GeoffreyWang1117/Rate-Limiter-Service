@@ -1,6 +1,5 @@
-import type { Redis } from 'ioredis';
 import { createHash } from 'crypto';
-import redisService from '../services/redis.service';
+import redisService, { type RedisLike } from '../services/redis.service';
 import metricsService from '../services/metrics.service';
 
 /**
@@ -34,7 +33,7 @@ export class RedisScript {
         `${this.name}: expected ${this.numKeys} keys, received ${keys.length}`
       );
     }
-    const redis: Redis = redisService.getClient();
+    const redis: RedisLike = redisService.getClient();
     const started = process.hrtime.bigint();
     try {
       return (await this.evalWithReload(redis, keys, args)) as T;
@@ -45,7 +44,7 @@ export class RedisScript {
   }
 
   private async evalWithReload(
-    redis: Redis,
+    redis: RedisLike,
     keys: string[],
     args: (string | number)[]
   ): Promise<unknown> {
@@ -59,10 +58,21 @@ export class RedisScript {
     }
   }
 
-  /** Pre-warms the server-side script cache. Safe to call repeatedly. */
+  /**
+   * Pre-warms the server-side script cache. Safe to call repeatedly.
+   *
+   * Loaded on every master, not through the routing client. `SCRIPT LOAD`
+   * carries no key, so a cluster client picks one node for it and the other
+   * masters never see the body -- pre-warming would then silently warm one
+   * shard in three. Correctness does not depend on this working, because an
+   * EVALSHA against a node that lacks the script answers NOSCRIPT and the
+   * caller ships the body; what it buys is that the first request to touch
+   * each shard does not pay for that round trip.
+   */
   async load(): Promise<void> {
-    const redis: Redis = redisService.getClient();
-    await redis.script('LOAD', this.body);
+    await Promise.all(
+      redisService.masters().map((node) => node.script('LOAD', this.body))
+    );
   }
 }
 

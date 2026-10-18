@@ -68,6 +68,14 @@ export interface RateLimiterConfig {
     db: number;
     maxRetries: number;
     retryDelay: number;
+    /**
+     * Seed nodes for Redis Cluster, as `host:port`. Empty means standalone.
+     *
+     * Presence of this list is what selects the client, rather than a separate
+     * boolean, so there is no way to configure "cluster mode on" and then not
+     * say where the cluster is.
+     */
+    clusterNodes: Array<{ host: string; port: number }>;
   };
   postgres: {
     host: string;
