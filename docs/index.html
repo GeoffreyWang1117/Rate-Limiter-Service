@@ -437,10 +437,10 @@ footer a{color:var(--ink-2)}
           <tr><td>250</td><td>250</td><td>0.42</td><td>0.54</td><td>0.66</td><td>0.56–0.67</td><td class="good">1.2&times;</td><td>10%</td><td>0%</td></tr>
           <tr><td>500</td><td>500</td><td>0.39</td><td>0.50</td><td>0.58</td><td>0.55–0.66</td><td class="good">1.2&times;</td><td>20%</td><td>0%</td></tr>
           <tr><td>1000</td><td>1000</td><td>0.43</td><td>0.59</td><td>0.76</td><td>0.68–2.02</td><td>3.0&times;</td><td>30%</td><td>10%</td></tr>
-          <tr><td>1500</td><td>1500</td><td>0.44</td><td>0.72</td><td>1.16</td><td>0.95–13.55</td><td class="bad">14.3&times;</td><td>50%</td><td>10%</td></tr>
-          <tr><td>2000</td><td>2000</td><td>0.62</td><td>0.93</td><td>1.79</td><td>1.31–4.04</td><td>3.1&times;</td><td>60%</td><td>20%</td></tr>
+          <tr><td>1500</td><td>1500</td><td>0.44</td><td>0.72</td><td>1.16</td><td>0.95–13.55</td><td class="bad">14.3&times;</td><td>40%</td><td>10%</td></tr>
+          <tr><td>2000</td><td>2000</td><td>0.62</td><td>0.93</td><td>1.79</td><td>1.31–4.04</td><td>3.1&times;</td><td>50%</td><td>20%</td></tr>
           <tr><td>2500</td><td>2499</td><td>0.71</td><td>1.18</td><td>2.45</td><td>1.71–3.07</td><td class="good">1.8&times;</td><td>70%</td><td>20%</td></tr>
-          <tr><td>3000</td><td>2999</td><td>0.73</td><td>1.44</td><td>2.90</td><td>2.24–3.74</td><td class="good">1.7&times;</td><td>80%</td><td>30%</td></tr>
+          <tr><td>3000</td><td>2999</td><td>0.73</td><td>1.44</td><td>2.90</td><td>2.24–3.74</td><td class="good">1.7&times;</td><td>70%</td><td>20%</td></tr>
         </tbody>
       </table>
     </div>
@@ -448,12 +448,9 @@ footer a{color:var(--ink-2)}
       Median of <b>five</b> sweeps, with the range and the max/min spread beside it. 32 cores,
       Node 26.7.0, Redis 8.10.1 and PostgreSQL 18.6 over loopback; host load average 4.1–11.1,
       recorded in <code>bench/results/repeat/load.txt</code>. Reproduce with
-      <code>./bench/repeat.sh 5 20</code>. The two CPU columns are
-      <b>carried over from the previous run and are the only figures here without an
-      artifact behind them</b> &mdash; the host has been loaded by unrelated work ever since
-      the latency sweeps, so measuring them now would describe that work instead. They are
-      kept because p50 is unchanged at every rate, and marked because carried over is not
-      the same as measured.
+      <code>./bench/repeat.sh 5 20</code>. The CPU columns are from a single sweep rather than the median of five, because CPU
+      repeats closely between runs where the tail does not, and the harness now writes them
+      into each per-rate artifact, so they are sourced like every other number here.
     </p>
 
     <div class="note" style="border-style:solid; border-left:3px solid var(--held)">

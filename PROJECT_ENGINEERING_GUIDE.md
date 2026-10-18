@@ -862,20 +862,23 @@ Redis (ephemeral, TTL'd) or PostgreSQL (durable, operator-managed).
 
 | offered | achieved | p50 | p95 | p99 | p99 range | spread | gw CPU | redis CPU |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 250 | 250 | 0.42 | 0.54 | 0.66 | 0.56–0.67 | 1.2× | 10%* | 0%* |
-| 500 | 500 | 0.39 | 0.50 | 0.58 | 0.55–0.66 | 1.2× | 20%* | 0%* |
-| 1000 | 1000 | 0.43 | 0.59 | 0.76 | 0.68–2.02 | 3.0× | 30%* | 10%* |
-| 1500 | 1500 | 0.44 | 0.72 | 1.16 | 0.95–13.55 | **14.3×** | 50%* | 10%* |
-| 2000 | 2000 | 0.62 | 0.93 | 1.79 | 1.31–4.04 | 3.1× | 60%* | 20%* |
-| 2500 | 2499 | 0.71 | 1.18 | 2.45 | 1.71–3.07 | 1.8× | 70%* | 20%* |
-| 3000 | 2999 | 0.73 | 1.44 | 2.90 | 2.24–3.74 | 1.7× | 80%* | 30%* |
+| 250 | 250 | 0.42 | 0.54 | 0.66 | 0.56–0.67 | 1.2× | 10% | 0% |
+| 500 | 500 | 0.39 | 0.50 | 0.58 | 0.55–0.66 | 1.2× | 20% | 0% |
+| 1000 | 1000 | 0.43 | 0.59 | 0.76 | 0.68–2.02 | 3.0× | 30% | 10% |
+| 1500 | 1500 | 0.44 | 0.72 | 1.16 | 0.95–13.55 | **14.3×** | 40% | 10% |
+| 2000 | 2000 | 0.62 | 0.93 | 1.79 | 1.31–4.04 | 3.1× | 50% | 20% |
+| 2500 | 2499 | 0.71 | 1.18 | 2.45 | 1.71–3.07 | 1.8× | 70% | 20% |
+| 3000 | 2999 | 0.73 | 1.44 | 2.90 | 2.24–3.74 | 1.7× | 70% | 20% |
 
-Re-measured 2026-10-15 after the `COMMIT_SCRIPT` refill fix changed the measured
-path. `*` the CPU columns are carried over from the 2026-09-06 run and are
-`[STALE]`, not `[ARTIFACT]`: the host has been loaded by unrelated work since the
-latency sweeps, and `sweep.sh` only gained the ability to write CPU into the
-per-rate artifact in the same change. p50 is unchanged at every rate, which is
-why they are carried rather than dropped.
+Latency re-measured 2026-10-15 after the `COMMIT_SCRIPT` refill fix changed the
+measured path; CPU re-measured 2026-10-17 once the host went quiet, and now
+`[ARTIFACT]` rather than `[STALE]` — `sweep.sh` writes it into each per-rate
+file. CPU is a single sweep, not the median of five, because it repeats closely
+across runs where the tail does not. Three rows moved against the 2026-09-06
+figures (1,500/2,000/3,000 read 50/60/80% then and 40/50/70% now, with Redis at
+3,000 going 30% to 20%); at 10-point granularity from one sweep that is
+agreement rather than conflict, and the shape — linear in offered rate, Redis
+never above a third of a core — is unchanged.
 
 **The spread did not reproduce, and that is the more useful result
 `[ARTIFACT]`.** In the first run it rose monotonically with offered rate

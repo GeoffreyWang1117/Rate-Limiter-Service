@@ -16,15 +16,21 @@ spec:
         name: cpu
         target:
           type: Utilization
-          # 60% of the one-core request. Read off the benchmark rather than
-          # chosen as a round number: measured gateway CPU is ~30% of a core at
-          # 1,000 admission cycles/s, which is the published capacity of a
-          # single replica, and ~60% at 2,000, where the tail has already begun
-          # to widen. Scaling out at 60% therefore adds a replica at roughly the
-          # load where one replica stops being comfortable, leaving the rest of
-          # the core as headroom for the burst that arrives during the ~15s it
-          # takes the new pod to pass its startup probe.
-          averageUtilization: 60
+          # 40% of the one-core request, derived from the benchmark rather
+          # than picked as a round number. Measured gateway CPU is 30% of a
+          # core at 1,000 admission cycles/s, and 1,000 is the published
+          # per-replica capacity -- the rate whose tail survived two separate
+          # runs. 50% is 2,000 cycles/s, where the tail has already widened.
+          #
+          # So the target has to sit just above 30%, not comfortably above it:
+          # a threshold of 60% would only add a replica somewhere past 2,400
+          # cycles/s, which is the repository publishing one capacity figure
+          # and then configuring for more than twice it. 40% adds the replica
+          # shortly after a pod passes its stated capacity, and leaves the
+          # remaining 60% of the core as headroom for the burst that keeps
+          # arriving during the ~15s the new pod needs to pass its startup
+          # probe.
+          averageUtilization: 40
   behavior:
     scaleUp:
       # Admission traffic arrives in bursts by nature -- that is the workload

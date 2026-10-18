@@ -1,5 +1,9 @@
 # LLM Admission Gateway
 
+> 📋 **改进方案**: 本仓有一份经过实查的改进方案 —— [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md)（2026-10-13）。
+> 跨项目索引（仓库外，本机）: `~/Engineering/ENGINEERING_IMPROVEMENT_INDEX_2026-10-13.md`
+
+
 Token-aware admission control for LLM inference, on Redis and PostgreSQL.
 
 A conventional API rate limiter charges every request one unit and decides once,
@@ -128,30 +132,32 @@ same host put 2,500 cycles/s at 14.9ms and then 38.8ms, and once had 3,000 come
 out better than 2,500 — which cannot be a property of the service. The spread
 column is what says whether a number is one.
 
-| offered cycles/s | achieved | p50 (ms) | p95 (ms) | p99 (ms) | p99 range | p99 spread | gateway CPU† | Redis CPU† |
+| offered cycles/s | achieved | p50 (ms) | p95 (ms) | p99 (ms) | p99 range | p99 spread | gateway CPU | Redis CPU |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | 250 | 250 | 0.42 | 0.54 | 0.66 | 0.56–0.67 | 1.2x | 10% | 0% |
 | 500 | 500 | 0.39 | 0.50 | 0.58 | 0.55–0.66 | 1.2x | 20% | 0% |
 | 1000 | 1000 | 0.43 | 0.59 | 0.76 | 0.68–2.02 | 3.0x | 30% | 10% |
-| 1500 | 1500 | 0.44 | 0.72 | 1.16 | 0.95–13.55 | **14.3x** | 50% | 10% |
-| 2000 | 2000 | 0.62 | 0.93 | 1.79 | 1.31–4.04 | 3.1x | 60% | 20% |
+| 1500 | 1500 | 0.44 | 0.72 | 1.16 | 0.95–13.55 | **14.3x** | 40% | 10% |
+| 2000 | 2000 | 0.62 | 0.93 | 1.79 | 1.31–4.04 | 3.1x | 50% | 20% |
 | 2500 | 2499 | 0.71 | 1.18 | 2.45 | 1.71–3.07 | 1.8x | 70% | 20% |
-| 3000 | 2999 | 0.73 | 1.44 | 2.90 | 2.24–3.74 | 1.7x | 80% | 30% |
+| 3000 | 2999 | 0.73 | 1.44 | 2.90 | 2.24–3.74 | 1.7x | 70% | 20% |
 
 Latency is of the `reserve` call, the phase that sits between a user and their
 first token. Host load average at the end of each sweep ran between 4.1 and 11.1
 on 32 cores, and the figure at the time of each run is recorded in its artifact.
 
-† **The two CPU columns are carried over from the previous run and are the one
-thing on this page without an artifact behind it.** They were measured on the
-code as it stood before the commit-path refill fix, and the host has been
-continuously loaded by unrelated work since the latency sweeps were taken, so
-re-measuring them now would produce a figure describing that work. They are kept
-rather than deleted because p50 is unchanged at every single rate, which is
-direct evidence that per-request cost did not move — but carried-over is not
-measured, and it is marked here rather than quietly left to look current. The
-sweep harness now writes these figures into each per-rate artifact, so the next
-run on a quiet host sources them like everything else.
+The CPU columns come from a single sweep rather than from the median of five,
+because CPU repeats closely between runs where the tail does not. They are no
+longer the one unsourced number on this page: the harness writes them into each
+per-rate artifact, so `bench/results/rate-2000.txt` now ends with the gateway
+and Redis figures for that run alongside the latency table.
+
+Re-measuring them moved three rows. The previous run read 50%/60%/80% at
+1,500/2,000/3,000 where this one reads 40%/50%/70%, with Redis at 3,000 going
+30% to 20%. At 10-point granularity from one sweep that is close agreement
+rather than a contradiction, and the shape — linear in offered rate, Redis
+never above a third of a core — is unchanged. It is reported because an HPA
+threshold elsewhere in this repository was derived from the older figures.
 
 **Reading it.** One replica holds p99 **under 1ms to 1,000 admission cycles/s** —
 2,000 HTTP requests/s, since each cycle is a reserve and a commit — and under 2ms

@@ -47,10 +47,14 @@ lands entirely in the tail — the exact quantity this project publishes and is
 judged on. Horizontal scaling is the answer to load here, so the protection
 against a noisy replica is the request plus the HPA, not a cap.
 
-**HPA at 60% CPU.** Read off the benchmark rather than picked as a round
-number: measured gateway CPU is ~30% of a core at 1,000 admission cycles/s,
-which is the published single-replica capacity, and ~60% at 2,000, where the
-tail has already begun to widen. See the benchmark table in the root README.
+**HPA at 40% CPU.** Derived from the benchmark, not picked as a round number.
+Measured gateway CPU is 30% of a core at 1,000 admission cycles/s, and 1,000 is
+the published per-replica capacity — the rate whose tail survived two separate
+runs. 2,000 cycles/s measures 50%, and the tail has already widened there. The
+target therefore has to sit just above 30% rather than comfortably above it: at
+60% the first extra replica would not arrive until roughly 2,400 cycles/s,
+which would be this repository publishing one capacity number and configuring
+for more than twice it. See the benchmark table in the root README.
 
 **`terminationGracePeriodSeconds: 35` against the application's own 30s
 backstop.** The process logs why it gave up before the kubelet kills it.
