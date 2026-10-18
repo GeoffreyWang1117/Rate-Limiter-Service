@@ -27,9 +27,18 @@ WORKDIR /app
 # PID 1 in a container does not reap children or forward signals by default, so
 # SIGTERM from an orchestrator would never reach the graceful-shutdown handler
 # and every deploy would end in a 30-second kill.
-# Pinned so a rebuild of this Dockerfile produces the same runtime, which is
-# the whole point of building it from a Dockerfile.
-RUN apk add --no-cache dumb-init=1.2.5-r3 && \
+# Pinned to the version, not the Alpine package revision. It was
+# `dumb-init=1.2.5-r3`, which read as reproducibility and behaved as a time
+# bomb: Alpine's index carries only current revisions, so the day upstream
+# rebuilt the package as -r4 the exact pin stopped resolving and every image
+# build failed. It had been failing in CI since the first run -- the one job
+# nobody looked at, because the tests beside it were green.
+#
+# `=~1.2.5` accepts any revision of 1.2.5 and still refuses a different
+# version. The honest statement of what that buys: the same dumb-init release,
+# not a byte-identical runtime. Byte-identical needs the base image pinned by
+# digest and a frozen package snapshot, neither of which is here.
+RUN apk add --no-cache 'dumb-init=~1.2.5' && \
     addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001
 

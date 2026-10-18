@@ -69,6 +69,7 @@ path, not in it: a gateway calls `reserve` before dispatching to a model and
 | Fact | Evidence |
 |---|---|
 | Compiles, boots, serves, and is exercised end-to-end by CI | `[CODE: .github/workflows/ci.yml:78-102]` |
+| The CI workflow had **never once passed**, from its first run on 2026-09-06 to 2026-10-18 | `[PROBE: gh run list]` — the `verify` job was green throughout; the `docker` job failed every time on an Alpine package pin that no longer resolved, and nobody opened it |
 | 103 tests across 10 suites against real Redis and real PostgreSQL, 81.6% statements | `[TEST]` |
 | Benchmarked with committed raw artifacts and a repeat-with-spread harness | `[ARTIFACT: bench/results/]` |
 | Security-audited; 11 confirmed findings fixed | `[GIT: 84c723b, d681d67]`, `[DOC: SECURITY.md]` |
